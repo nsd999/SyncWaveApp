@@ -46,8 +46,11 @@ import {
   ChevronUp,
   Sun,
   Moon,
-  Laptop
+  Laptop,
+  RotateCcw,
+  RotateCw
 } from 'lucide-react';
+import { useTheme } from 'next-themes';
 import { motion, AnimatePresence } from 'motion/react';
 import { PlaybackState } from '@/types/playback';
 import { PlaybackSyncService } from '@/lib/playback-service';
@@ -112,8 +115,38 @@ export default function RoomPage() {
   const [mediaUrl, setMediaUrl] = React.useState('');
   const [mediaType, setMediaType] = React.useState<'video' | 'audio'>('video');
   const [customUrlInput, setCustomUrlInput] = React.useState('');
-  const [videoVolume, setVideoVolume] = React.useState(0.8);
-  const [isMuted, setIsMuted] = React.useState(false);
+  
+  // Volume persistence (BUG 4)
+  const [videoVolume, setVideoVolume] = React.useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('syncwave-volume');
+      if (saved !== null) {
+        const val = parseFloat(saved);
+        return isNaN(val) ? 0.8 : val;
+      }
+    }
+    return 0.8;
+  });
+  
+  const [isMuted, setIsMuted] = React.useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('syncwave-muted');
+      return saved === 'true';
+    }
+    return false;
+  });
+
+  const [playbackRate, setPlaybackRate] = React.useState<number>(1);
+  const [toasts, setToasts] = React.useState<any[]>([]);
+
+  const showToast = React.useCallback((message: string, type: 'success' | 'warning' | 'error' | 'info' = 'info') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5500);
+  }, []);
+
   const [syncStatusText, setSyncStatusText] = React.useState('Initializing synchronization...');
 
   // Media Queue & Chat Interactions States
@@ -131,17 +164,8 @@ export default function RoomPage() {
   const [showEmbedToast, setShowEmbedToast] = React.useState(false);
   const [mediaStatus, setMediaStatus] = React.useState<'Playing' | 'Paused' | 'Buffering' | 'Ended' | 'Live' | 'Standby'>('Standby');
 
-  // Theme management states
-  const [theme, setTheme] = React.useState<'light' | 'dark' | 'system'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('syncwave-theme');
-      if (saved === 'light' || saved === 'dark' || saved === 'system') {
-        return saved;
-      }
-    }
-    return 'system';
-  });
-  const [resolvedTheme, setResolvedTheme] = React.useState<'light' | 'dark'>('dark');
+  // Theme management handled via next-themes (BUG 1)
+  const { theme, setTheme, resolvedTheme = 'dark' } = useTheme();
   const [showThemeMenu, setShowThemeMenu] = React.useState(false);
 
   // YouTube Metadata Preview State
@@ -162,32 +186,23 @@ export default function RoomPage() {
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [uploadedFileName, setUploadedFileName] = React.useState<string | null>(null);
 
-  // Theme Sync logic
-  React.useEffect(() => {
-    if (theme === 'system') {
-      const media = window.matchMedia('(prefers-color-scheme: dark)');
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setResolvedTheme(media.matches ? 'dark' : 'light');
-      
-      const listener = (e: MediaQueryListEvent) => {
-        setResolvedTheme(e.matches ? 'dark' : 'light');
-      };
-      media.addEventListener('change', listener);
-      return () => media.removeEventListener('change', listener);
-    } else {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setResolvedTheme(theme);
-    }
-    localStorage.setItem('syncwave-theme', theme);
-  }, [theme]);
+  // Theme state updates handled natively by next-themes wrapper
 
   React.useEffect(() => {
-    if (resolvedTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [resolvedTheme]);
+    const handleGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    const handleGlobalDrop = (e: DragEvent) => {
+      // Prevent browser default action of loading dropped files
+      e.preventDefault();
+    };
+    window.addEventListener('dragover', handleGlobalDragOver);
+    window.addEventListener('drop', handleGlobalDrop);
+    return () => {
+      window.removeEventListener('dragover', handleGlobalDragOver);
+      window.removeEventListener('drop', handleGlobalDrop);
+    };
+  }, []);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -919,6 +934,182 @@ export default function RoomPage() {
     }
   };
 
+  const syncLocalPlayerWithNewState = React.useCallback((newState: PlaybackState) => {
+    if (!newState) return;
+    setPlaybackState(newState);
+
+    const isYouTube = newState.media_url && (newState.media_url.includes('youtube.com') || newState.media_url.includes('youtu.be') || newState.media_url.includes('/embed/'));
+
+    // 1. Synchronize loaded URL and media type
+    setMediaUrl((prevUrl) => {
+      if (prevUrl !== newState.media_url) {
+        return newState.media_url || '';
+      }
+      return prevUrl;
+    });
+
+    setMediaType((prevType) => {
+      const nextType = (newState.media_type as 'video' | 'audio') || 'video';
+      if (prevType !== nextType) {
+        return nextType;
+      }
+      return prevType;
+    });
+
+    // 2. Synchronize playback speed/rate!
+    const targetRate = Number(newState.playback_rate) || 1;
+    setPlaybackRate(targetRate);
+
+    if (isYouTube) {
+      // Sync YouTube IFrame Player
+      const yt = ytPlayerRef.current;
+      if (yt && typeof yt.getPlayerState === 'function') {
+        isUpdatingFromRemote.current = true;
+
+        // Sync Speed Rate
+        if (typeof yt.setPlaybackRate === 'function') {
+          try {
+            yt.setPlaybackRate(targetRate);
+          } catch (e) {}
+        }
+
+        // Sync play/pause state
+        const ytState = yt.getPlayerState();
+        // ytState codes: 1 = playing, 2 = paused
+        if (newState.is_playing) {
+          if (ytState !== 1) {
+            try {
+              yt.playVideo();
+            } catch (e) {}
+            setIsPlaying(true);
+          }
+        } else {
+          if (ytState !== 2 && ytState !== 0) { // not paused and not ended
+            try {
+              yt.pauseVideo();
+            } catch (e) {}
+            setIsPlaying(false);
+          }
+        }
+
+        // Sync timeline seek
+        if (typeof yt.getCurrentTime === 'function') {
+          const ytTime = yt.getCurrentTime();
+          const lag = Math.abs(ytTime - newState.current_time);
+          if (lag > 2) {
+            try {
+              yt.seekTo(newState.current_time, true);
+              setCurrentTime(newState.current_time);
+            } catch (e) {}
+          }
+        }
+
+        setSyncStatusText(`Synced • Last update ${new Date(newState.last_sync_at).toLocaleTimeString()}`);
+        setTimeout(() => {
+          isUpdatingFromRemote.current = false;
+        }, 150);
+      }
+    } else {
+      // Sync HTML5 Video/Audio Player
+      const player = playerRef.current;
+      if (player) {
+        isUpdatingFromRemote.current = true;
+
+        // Sync Speed/Rate
+        player.playbackRate = targetRate;
+
+        // Sync play/pause state
+        const isCurrentlyPlaying = !player.paused;
+        if (newState.is_playing && !isCurrentlyPlaying) {
+          player.play().catch(e => console.log('Autoplay deferred:', e));
+          setIsPlaying(true);
+        } else if (!newState.is_playing && isCurrentlyPlaying) {
+          player.pause();
+          setIsPlaying(false);
+        }
+
+        // Sync timeline seek
+        const lag = Math.abs(player.currentTime - newState.current_time);
+        if (lag > 2) {
+          player.currentTime = newState.current_time;
+          setCurrentTime(newState.current_time);
+        }
+
+        setSyncStatusText(`Synced • Last update ${new Date(newState.last_sync_at).toLocaleTimeString()}`);
+        setTimeout(() => {
+          isUpdatingFromRemote.current = false;
+        }, 150);
+      }
+    }
+  }, [mediaUrl]);
+
+  const handleHostSpeedChange = async (rate: number) => {
+    if (!room || !currentIsHost) return;
+    setPlaybackRate(rate);
+
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    if (isYouTube) {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.setPlaybackRate === 'function') {
+        try {
+          ytPlayerRef.current.setPlaybackRate(rate);
+        } catch (e) {
+          console.warn('Failed to set YouTube playback rate:', e);
+        }
+      }
+    } else {
+      if (playerRef.current) {
+        playerRef.current.playbackRate = rate;
+      }
+    }
+
+    await PlaybackSyncService.updateRate(room.id, rate, user?.id);
+    showToast(`Playback speed scaled to ${rate}x`, "success");
+  };
+
+  const handleHostBackward10 = async () => {
+    if (!room || !currentIsHost) return;
+    const target = Math.max(0, currentTime - 10);
+    setCurrentTime(target);
+
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    if (isYouTube) {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+        try {
+          ytPlayerRef.current.seekTo(target, true);
+        } catch (e) {}
+      }
+    } else {
+      if (playerRef.current) {
+        playerRef.current.currentTime = target;
+      }
+    }
+
+    await PlaybackSyncService.seek(room.id, target, user?.id);
+    showToast("Skipped backward 10s", "info");
+  };
+
+  const handleHostForward10 = async () => {
+    if (!room || !currentIsHost) return;
+    const target = Math.min(duration || 1000, currentTime + 10);
+    setCurrentTime(target);
+
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    if (isYouTube) {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+        try {
+          ytPlayerRef.current.seekTo(target, true);
+        } catch (e) {}
+      }
+    } else {
+      if (playerRef.current) {
+        playerRef.current.currentTime = target;
+      }
+    }
+
+    await PlaybackSyncService.seek(room.id, target, user?.id);
+    showToast("Skipped forward 10s", "info");
+  };
+
   // QUEUE OPERATIONS
   const handleAddMediaToQueue = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1234,37 +1425,58 @@ export default function RoomPage() {
         return;
       }
 
-      // Initialize room playback state and late join synchronization
+      // Initialize room playback state and late join synchronization (BUG 4)
       const hostCheck = activeRoom.host_id === user?.id;
       PlaybackSyncService.initializePlaybackState(activeRoom.id, hostCheck).then((state) => {
         if (state) {
-          setPlaybackState(state);
-          setMediaUrl(state.media_url || '');
-          setMediaType((state.media_type as 'video' | 'audio') || 'video');
-          
-          // Late Join & Drift Recovery
+          // Late Join & Drift Recovery with respect to playback speed (BUG 2 & BUG 4)
           let targetTime = state.current_time;
           if (state.is_playing && state.last_sync_at) {
             const elapsed = (Date.now() - new Date(state.last_sync_at).getTime()) / 1000;
-            targetTime = state.current_time + elapsed;
+            const rate = Number(state.playback_rate) || 1;
+            targetTime = state.current_time + (elapsed * rate);
             if (state.duration && targetTime > state.duration) {
               targetTime = state.duration;
             }
           }
           
+          const restoredState = {
+            ...state,
+            current_time: targetTime
+          };
+
+          syncLocalPlayerWithNewState(restoredState);
           setCurrentTime(targetTime);
-          setIsPlaying(state.is_playing);
           
-          // Apply to player element lazily
+          // Apply to players lazily once their refs are ready in the DOM
           setTimeout(() => {
             const player = playerRef.current;
             if (player) {
               player.currentTime = targetTime;
+              player.playbackRate = Number(state.playback_rate) || 1;
               if (state.is_playing) {
                 player.play().catch(e => console.log('[Playback Engine] Late join autoplay deferred:', e));
               }
             }
-          }, 300);
+            const yt = ytPlayerRef.current;
+            if (yt && typeof yt.getPlayerState === 'function') {
+              if (typeof yt.setPlaybackRate === 'function') {
+                try {
+                  yt.setPlaybackRate(Number(state.playback_rate) || 1);
+                } catch (e) {}
+              }
+              if (typeof yt.seekTo === 'function') {
+                try {
+                  yt.seekTo(targetTime, true);
+                } catch (e) {}
+              }
+              if (state.is_playing && typeof yt.playVideo === 'function') {
+                try {
+                  yt.playVideo();
+                } catch (e) {}
+              }
+            }
+          }, 600);
           
           // Fetch current media queue
           PlaybackSyncService.fetchQueue(activeRoom.id).then((items) => {
@@ -1419,51 +1631,7 @@ export default function RoomPage() {
           console.log('[Room Realtime Update] playback_state payload:', payload);
           const newState = payload.new as PlaybackState;
           if (newState) {
-            setPlaybackState(newState);
-
-            const player = playerRef.current;
-            if (player) {
-              isUpdatingFromRemote.current = true;
-
-              // Synchronize loaded URL and media type
-              setMediaUrl((prevUrl) => {
-                if (prevUrl !== newState.media_url) {
-                  return newState.media_url || '';
-                }
-                return prevUrl;
-              });
-
-              setMediaType((prevType) => {
-                const nextType = (newState.media_type as 'video' | 'audio') || 'video';
-                if (prevType !== nextType) {
-                  return nextType;
-                }
-                return prevType;
-              });
-
-              // Synchronize play/pause state
-              const isCurrentlyPlaying = !player.paused;
-              if (newState.is_playing && !isCurrentlyPlaying) {
-                player.play().catch(e => console.log('Autoplay deferred:', e));
-                setIsPlaying(true);
-              } else if (!newState.is_playing && isCurrentlyPlaying) {
-                player.pause();
-                setIsPlaying(false);
-              }
-
-              // Synchronize timeline seek
-              const lag = Math.abs(player.currentTime - newState.current_time);
-              if (lag > 2) {
-                player.currentTime = newState.current_time;
-                setCurrentTime(newState.current_time);
-              }
-
-              setSyncStatusText(`Synced • Last update ${new Date(newState.last_sync_at).toLocaleTimeString()}`);
-
-              setTimeout(() => {
-                isUpdatingFromRemote.current = false;
-              }, 150);
-            }
+            syncLocalPlayerWithNewState(newState);
           }
         }
       )
@@ -1516,6 +1684,9 @@ export default function RoomPage() {
     navigator.clipboard.writeText(url).then(() => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 3000);
+      showToast("Lounge invite link copied to clipboard!", "success");
+    }).catch(() => {
+      showToast("Permission denied, please manually highlight or copy URL", "warning");
     });
   };
 
@@ -2102,16 +2273,17 @@ export default function RoomPage() {
               )}
 
               {/* Stage Controls */}
-              <div className="flex items-center justify-between gap-4 pt-3 border-t border-stone-200 dark:border-stone-850/60 z-10 relative">
+              <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-stone-200 dark:border-stone-850/60 z-10 relative">
                 
-                <div className="flex items-center space-x-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {currentIsHost ? (
                     <>
+                      {/* Play / Pause button */}
                       {isPlaying ? (
                         <button
                           onClick={handleHostPause}
                           id="host-pause-btn"
-                          className="p-2.5 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-800 text-amber-500 border border-stone-205 dark:border-stone-800 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs font-bold leading-none gap-2 px-4 shadow-sm dark:shadow-lg"
+                          className="p-2.5 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-800 text-amber-500 border border-stone-200 dark:border-stone-800 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs font-bold leading-none gap-2 px-4 shadow-sm dark:shadow-lg"
                           title="Pause Stream"
                         >
                           <Pause className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
@@ -2129,6 +2301,28 @@ export default function RoomPage() {
                         </button>
                       )}
 
+                      {/* Backward 10s */}
+                      <button
+                        onClick={handleHostBackward10}
+                        id="host-backward-10-btn"
+                        className="p-2.5 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
+                        title="Rewind 10 seconds"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                        <span className="text-[10px] ml-1 font-bold">10s</span>
+                      </button>
+
+                      {/* Forward 10s */}
+                      <button
+                        onClick={handleHostForward10}
+                        id="host-forward-10-btn"
+                        className="p-2.5 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
+                        title="Skip forward 10 seconds"
+                      >
+                        <RotateCw className="w-3.5 h-3.5 shrink-0" />
+                        <span className="text-[10px] ml-1 font-bold">10s</span>
+                      </button>
+
                       {/* Skip next button */}
                       {queue.length > 0 && (
                         <button
@@ -2141,11 +2335,37 @@ export default function RoomPage() {
                           <span>SKIP TRACK</span>
                         </button>
                       )}
+
+                      {/* Playback Speed selector */}
+                      <div className="flex items-center gap-1 bg-stone-100 dark:bg-stone-850 p-1 rounded-xl border border-stone-200 dark:border-stone-800 text-[10px] font-mono font-bold shrink-0">
+                        <span className="px-1 text-[9px] text-stone-500 uppercase tracking-widest">SPEED</span>
+                        {[0.5, 1, 1.25, 1.5, 2].map((rate) => (
+                          <button
+                            key={rate}
+                            type="button"
+                            onClick={() => handleHostSpeedChange(rate)}
+                            className={`px-2 py-1 rounded-lg cursor-pointer transition text-[9px] ${
+                              playbackRate === rate
+                                ? 'bg-amber-500 text-stone-950 font-extrabold shadow'
+                                : 'text-stone-400 hover:text-stone-700 dark:hover:text-stone-200'
+                            }`}
+                          >
+                            {rate}x
+                          </button>
+                        ))}
+                      </div>
                     </>
                   ) : (
-                    <div className="flex items-center space-x-2 bg-stone-900 border border-stone-850 px-3.5 py-2 rounded-xl text-xs font-mono text-stone-400">
-                      <div className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></div>
-                      <span>{isPlaying ? 'PLAYING • BRANDED SYNC' : 'PAUSED • IN STANDBY'}</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center space-x-2 bg-stone-900 border border-stone-850 px-3.5 py-2 rounded-xl text-xs font-mono text-stone-400">
+                        <div className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></div>
+                        <span>{isPlaying ? 'PLAYING • BRANDED SYNC' : 'PAUSED • IN STANDBY'}</span>
+                      </div>
+                      
+                      {/* Read only speed indicator for non-host */}
+                      <div className="bg-stone-900 border border-stone-850 px-3 py-2 rounded-xl text-xs font-mono text-stone-400">
+                        <span>SPEED: {playbackRate}x</span>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2746,6 +2966,41 @@ export default function RoomPage() {
       </div> {/* END OF RIGHT SIDEBAR */}
     </div> {/* END OF GRID SPLIT CONTAINER */}
 
+      </div>
+
+      {/* Floating Animated Toast Notifications (BUG 6) */}
+      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+        <AnimatePresence>
+          {toasts.map((t) => (
+            <motion.div
+              key={t.id}
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              className={`pointer-events-auto flex items-center justify-between p-3.5 rounded-xl border shadow-lg backdrop-blur-md ${
+                t.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' :
+                t.type === 'warning' ? 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400' :
+                t.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-605 dark:text-rose-400' :
+                'bg-white/90 dark:bg-stone-900/90 border-stone-200 dark:border-stone-800 text-stone-800 dark:text-stone-100'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {t.type === 'success' && <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+                {t.type === 'warning' && <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
+                {t.type === 'error' && <div className="h-1.5 w-1.5 rounded-full bg-rose-500" />}
+                {t.type === 'info' && <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
+                <span className="text-[11px] font-bold tracking-tight font-sans leading-tight">{t.message}</span>
+              </div>
+              <button
+                onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+                className="p-1 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-lg text-stone-500 hover:text-stone-900 dark:hover:text-stone-200 cursor-pointer transition ml-2 shrink-0"
+                title="Dismiss Alert"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
 
     </div>

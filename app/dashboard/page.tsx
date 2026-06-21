@@ -9,6 +9,7 @@ import { writeLog } from '@/lib/logger';
 import { getSupabase } from '@/lib/supabase';
 import { generateRoomCode } from '@/lib/room';
 import Logo from '@/components/Logo';
+import { useTheme } from 'next-themes';
 import { 
   LogOut, 
   User, 
@@ -51,17 +52,8 @@ export default function DashboardPage() {
   const [successNotice, setSuccessNotice] = React.useState<string | null>(null);
   const [errorNotice, setErrorNotice] = React.useState<string | null>(null);
   
-  // Theme management states
-  const [theme, setTheme] = React.useState<'light' | 'dark' | 'system'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('syncwave-theme');
-      if (saved === 'light' || saved === 'dark' || saved === 'system') {
-        return saved;
-      }
-    }
-    return 'system';
-  });
-  const [resolvedTheme, setResolvedTheme] = React.useState<'light' | 'dark'>('dark');
+  // Theme management states from next-themes
+  const { theme, setTheme, resolvedTheme = 'dark' } = useTheme();
   const [showThemeMenu, setShowThemeMenu] = React.useState(false);
 
   // Room management states
@@ -100,33 +92,7 @@ export default function DashboardPage() {
     );
   }, []);
 
-  // Theme Sync logic
-  React.useEffect(() => {
-    if (theme === 'system') {
-      const media = window.matchMedia('(prefers-color-scheme: dark)');
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setResolvedTheme(media.matches ? 'dark' : 'light');
-      
-      const listener = (e: MediaQueryListEvent) => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setResolvedTheme(e.matches ? 'dark' : 'light');
-      };
-      media.addEventListener('change', listener);
-      return () => media.removeEventListener('change', listener);
-    } else {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setResolvedTheme(theme);
-    }
-    localStorage.setItem('syncwave-theme', theme);
-  }, [theme]);
-
-  React.useEffect(() => {
-    if (resolvedTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [resolvedTheme]);
+  // Resolved theme effects handled by next-themes natively
 
   const fetchRoomsDetails = React.useCallback(async () => {
     if (!user) return;

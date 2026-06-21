@@ -5,3 +5,5 @@
   --font-mono: var(--font-mono), ui-monospace, SFMono-Regular, Roboto Mono, Menlo, Monaco, Consolas, monospace;
 }
 
+@variant dark (&:where(.dark, .dark *));
+

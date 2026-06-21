@@ -22,15 +22,21 @@ import {
   X, 
   Clock, 
   Radio, 
-  Share2 
+  Share2,
+  Sun,
+  Moon,
+  Laptop
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useTheme } from 'next-themes';
 
 export const dynamic = 'force-dynamic';
 
 export default function Home() {
   const router = useRouter();
   const { user, profile, loading, signOut } = useAuth();
+  
+  const { theme, setTheme, resolvedTheme = 'dark' } = useTheme();
 
   // Dialog / Modal triggers
   const [showCreateModal, setShowCreateModal] = React.useState(false);
@@ -319,7 +325,7 @@ export default function Home() {
   };
 
   return (
-    <div id="landing-container" className="min-h-screen bg-stone-50 text-stone-900 flex flex-col justify-between selection:bg-cyan-150 relative overflow-hidden">
+    <div id="landing-container" className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col justify-between selection:bg-cyan-150 dark:selection:bg-cyan-950/40 relative overflow-hidden">
       
       {/* Visual background ripple ambient decorations */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[450px] opacity-[0.06] pointer-events-none z-0">
@@ -327,7 +333,7 @@ export default function Home() {
       </div>
 
       {/* Navigation Header bar */}
-      <header id="landing-header" className="border-b border-stone-200/75 bg-white/80 backdrop-blur-md sticky top-0 z-30 select-none">
+      <header id="landing-header" className="border-b border-stone-200/75 dark:border-stone-850/60 bg-white/80 dark:bg-stone-950/80 backdrop-blur-md sticky top-0 z-30 select-none">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <Link href="/">
             <Logo />
@@ -336,19 +342,59 @@ export default function Home() {
           <nav id="header-nav" className="flex items-center space-x-1.5 sm:space-x-4">
             <button
               onClick={handleCreateRoomClick}
-              className="text-xs sm:text-sm text-stone-600 hover:text-stone-900 hover:bg-stone-50 px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition font-medium cursor-pointer"
+              className="text-xs sm:text-sm text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white hover:bg-stone-50 dark:hover:bg-stone-900 px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition font-medium cursor-pointer"
             >
               Create Room
             </button>
             <button
               onClick={handleJoinRoomClick}
-              className="text-xs sm:text-sm text-stone-600 hover:text-stone-900 hover:bg-stone-50 px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition font-medium cursor-pointer"
+              className="text-xs sm:text-sm text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white hover:bg-stone-50 dark:hover:bg-stone-900 px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition font-medium cursor-pointer"
             >
               Join Room
             </button>
 
+            {/* COMPACT THEME SELECTOR ON LANDING PAGE HEADER */}
+            <div id="landing-theme-selector" className="flex items-center gap-1 bg-stone-100 dark:bg-stone-900 p-1 rounded-xl border border-stone-200 dark:border-stone-850 shrink-0 font-mono text-[9px] mr-1">
+              <button
+                type="button"
+                onClick={() => setTheme('light')}
+                className={`p-1 rounded transition text-[9px] flex items-center gap-1 cursor-pointer ${
+                  theme === 'light'
+                    ? 'bg-white dark:bg-stone-800 text-amber-600 font-bold shadow-sm'
+                    : 'text-stone-400 hover:text-stone-700 dark:hover:text-stone-200'
+                }`}
+                title="Light mode"
+              >
+                <Sun className="w-3 h-3 text-amber-500 font-bold" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setTheme('dark')}
+                className={`p-1 rounded transition text-[9px] flex items-center gap-1 cursor-pointer ${
+                  theme === 'dark'
+                    ? 'bg-stone-800 text-indigo-400 font-bold shadow-sm'
+                    : 'text-stone-400 hover:text-stone-700 dark:hover:text-stone-200'
+                }`}
+                title="Dark mode"
+              >
+                <Moon className="w-3 h-3 text-indigo-400 font-bold" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setTheme('system')}
+                className={`p-1 rounded transition text-[9px] flex items-center gap-1 cursor-pointer ${
+                  theme === 'system'
+                    ? 'bg-stone-200 dark:bg-stone-800 text-teal-400 font-bold shadow-sm'
+                    : 'text-stone-400 hover:text-stone-700 dark:hover:text-stone-200'
+                }`}
+                title="System theme"
+              >
+                <Laptop className="w-3 h-3 text-teal-400 font-bold" />
+              </button>
+            </div>
+
             {/* Separator line */}
-            <span className="h-4 w-px bg-stone-200 self-center"></span>
+            <span className="h-4 w-px bg-stone-200 dark:bg-stone-800 self-center"></span>
 
             {user ? (
               <div className="flex items-center space-x-1 sm:space-x-3">
@@ -396,13 +442,13 @@ export default function Home() {
 
         {/* Headlines */}
         <div className="space-y-4 max-w-3xl">
-          <h1 id="hero-headline" className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-stone-900 leading-[1.12]">
+          <h1 id="hero-headline" className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-stone-900 dark:text-stone-50 leading-[1.12]">
             Listen Together. <br className="hidden sm:inline" />
             <span className="bg-gradient-to-r from-cyan-500 via-blue-500 to-fuchsia-500 bg-clip-text text-transparent">
               Perfectly Synced.
             </span>
           </h1>
-          <p id="hero-subheadline" className="text-stone-500 max-w-xl mx-auto text-base sm:text-lg tracking-normal font-sans leading-relaxed">
+          <p id="hero-subheadline" className="text-stone-500 dark:text-stone-400 max-w-xl mx-auto text-base sm:text-lg tracking-normal font-sans leading-relaxed">
             Create a room or join one instantly. Connect with your friends, share high-fidelity media, and synchronize playback perfectly in real-time.
           </p>
         </div>
@@ -439,32 +485,32 @@ export default function Home() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left w-full max-w-4xl mx-auto">
             {/* Feature 1 */}
-            <div className="bg-white border border-stone-200/80 p-5 rounded-2xl shadow-sm hover:shadow-md transition duration-200">
-              <div className="w-8 h-8 rounded-lg bg-cyan-50 flex items-center justify-center text-cyan-600 mb-3.5 border border-cyan-100">
+            <div className="bg-white dark:bg-stone-900/60 border border-stone-200/80 dark:border-stone-850/60 p-5 rounded-2xl shadow-sm hover:shadow-md transition duration-200">
+              <div className="w-8 h-8 rounded-lg bg-cyan-50 dark:bg-cyan-950/20 flex items-center justify-center text-cyan-600 dark:text-cyan-400 mb-3.5 border border-cyan-100 dark:border-cyan-900/40">
                 <Clock className="w-4 h-4" />
               </div>
-              <h3 className="font-semibold text-stone-900 text-sm mb-1">Perfect Synchronization</h3>
-              <p className="text-xs text-stone-500 leading-relaxed">
+              <h3 className="font-semibold text-stone-900 dark:text-stone-50 text-sm mb-1">Perfect Synchronization</h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
                 Connect and witness zero-lag real-time media synchronization. Playback controls update immediately across all active lounge listeners.
               </p>
             </div>
             {/* Feature 2 */}
-            <div className="bg-white border border-stone-200/80 p-5 rounded-2xl shadow-sm hover:shadow-md transition duration-200">
-              <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600 mb-3.5 border border-blue-100">
+            <div className="bg-white dark:bg-stone-900/60 border border-stone-200/80 dark:border-stone-850/60 p-5 rounded-2xl shadow-sm hover:shadow-md transition duration-200">
+              <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-950/20 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-3.5 border border-blue-100 dark:border-blue-900/40">
                 <Users className="w-4 h-4" />
               </div>
-              <h3 className="font-semibold text-stone-900 text-sm mb-1">Live Participant Rooms</h3>
-              <p className="text-xs text-stone-500 leading-relaxed">
+              <h3 className="font-semibold text-stone-900 dark:text-stone-50 text-sm mb-1">Live Participant Rooms</h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
                 Stay updated with the real-time observer list. See active listeners, and dynamic host privileges immediately without latency.
               </p>
             </div>
             {/* Feature 3 */}
-            <div className="bg-white border border-stone-200/80 p-5 rounded-2xl shadow-sm hover:shadow-md transition duration-200">
-              <div className="w-8 h-8 rounded-lg bg-fuchsia-50 flex items-center justify-center text-fuchsia-600 mb-3.5 border border-fuchsia-100">
+            <div className="bg-white dark:bg-stone-900/60 border border-stone-200/80 dark:border-stone-850/60 p-5 rounded-2xl shadow-sm hover:shadow-md transition duration-200">
+              <div className="w-8 h-8 rounded-lg bg-fuchsia-50 dark:bg-fuchsia-950/20 flex items-center justify-center text-fuchsia-600 dark:text-fuchsia-400 mb-3.5 border border-fuchsia-100 dark:border-fuchsia-900/40">
                 <Share2 className="w-4 h-4" />
               </div>
-              <h3 className="font-semibold text-stone-900 text-sm mb-1">Frictionless Listener Entry</h3>
-              <p className="text-xs text-stone-500 leading-relaxed">
+              <h3 className="font-semibold text-stone-900 dark:text-stone-50 text-sm mb-1">Frictionless Listener Entry</h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
                 Listeners can join instantly by simply specifying an intuitive temporary handle name. No account or credentials required contextually.
               </p>
             </div>

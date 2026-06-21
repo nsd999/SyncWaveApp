@@ -173,6 +173,31 @@ export class PlaybackSyncService {
   }
 
   /**
+   * Updates playback_rate for synchronous playback speed adjustment.
+   */
+  static async updateRate(roomId: string, playbackRate: number, updatedByUserId?: string): Promise<void> {
+    const supabase = getSupabase() as any;
+    if (!supabase) return;
+
+    try {
+      const { error } = await supabase
+        .from('playback_state')
+        .update({
+          playback_rate: playbackRate,
+          last_sync_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          updated_by: updatedByUserId || null
+        } as any)
+        .eq('room_id', roomId);
+
+      if (error) throw error;
+      writeLog('success', 'Sync Wave Engine', `Host broadcasted SPEED event: ${playbackRate}x`);
+    } catch (e: any) {
+      console.error('[PlaybackSyncService] updateRate error:', e.message);
+    }
+  }
+
+  /**
    * Changes the media URL loaded in the player.
    */
   static async updateMedia(
