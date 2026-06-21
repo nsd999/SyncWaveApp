@@ -124,10 +124,12 @@ export default function RoomPage() {
   const [typingUsers, setTypingUsers] = React.useState<string[]>([]);
   const [isTyping, setIsTyping] = React.useState(false);
   
-  // UX Phase 3.2 Refinement States
+  // UX Phase 3.2 & 3.3 Refinement States
   const [isHostToolsOpen, setIsHostToolsOpen] = React.useState(false);
   const [youtubeFailed, setYoutubeFailed] = React.useState(false);
   const [urlError, setUrlError] = React.useState<string | null>(null);
+  const [showEmbedToast, setShowEmbedToast] = React.useState(false);
+  const [mediaStatus, setMediaStatus] = React.useState<'Playing' | 'Paused' | 'Buffering' | 'Ended' | 'Live' | 'Standby'>('Standby');
 
   // Theme management states
   const [theme, setTheme] = React.useState<'light' | 'dark' | 'system'>(() => {
@@ -188,11 +190,21 @@ export default function RoomPage() {
   }, [resolvedTheme]);
 
   React.useEffect(() => {
-    if (youtubeFailed) {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setYoutubeFailed(false);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setShowEmbedToast(false);
+  }, [mediaUrl]);
+
+  React.useEffect(() => {
+    if (!mediaUrl) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setYoutubeFailed(false);
+      setMediaStatus('Standby');
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMediaStatus(isPlaying ? 'Playing' : 'Paused');
     }
-  }, [mediaUrl, youtubeFailed]);
+  }, [mediaUrl, isPlaying]);
   
   const playerRef = React.useRef<HTMLVideoElement | null>(null);
   const ytPlayerRef = React.useRef<any>(null);
@@ -565,39 +577,100 @@ export default function RoomPage() {
   const currentIsHost = room ? room.host_id === user?.id : false;
 
   const handleHostPlay = async () => {
-    if (!room || !currentIsHost || !playerRef.current) return;
-    const player = playerRef.current;
-    try {
-      await player.play();
-      setIsPlaying(true);
-      await PlaybackSyncService.play(room.id, player.currentTime, user?.id);
-    } catch (e) {
-      console.error('Failed to trigger play:', e);
+    if (!room || !currentIsHost) return;
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    
+    setIsPlaying(true);
+    setMediaStatus('Playing');
+    let curTime = currentTime;
+
+    if (isYouTube) {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.playVideo === 'function') {
+        try {
+          ytPlayerRef.current.playVideo();
+          curTime = ytPlayerRef.current.getCurrentTime() || 0;
+        } catch (e) {
+          console.warn('Failed play call on YouTube ref:', e);
+        }
+      }
+    } else {
+      const player = playerRef.current;
+      if (player) {
+        try {
+          await player.play();
+          curTime = player.currentTime;
+        } catch (e) {
+          console.error('Failed to trigger HTML5 play:', e);
+        }
+      }
     }
+
+    await PlaybackSyncService.play(room.id, curTime, user?.id);
   };
 
   const handleHostPause = async () => {
-    if (!room || !currentIsHost || !playerRef.current) return;
-    const player = playerRef.current;
-    player.pause();
+    if (!room || !currentIsHost) return;
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+
     setIsPlaying(false);
-    await PlaybackSyncService.pause(room.id, player.currentTime, user?.id);
+    setMediaStatus('Paused');
+    let curTime = currentTime;
+
+    if (isYouTube) {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
+        try {
+          ytPlayerRef.current.pauseVideo();
+          curTime = ytPlayerRef.current.getCurrentTime() || 0;
+        } catch (e) {
+          console.warn('Failed pause call on YouTube ref:', e);
+        }
+      }
+    } else {
+      const player = playerRef.current;
+      if (player) {
+        player.pause();
+        curTime = player.currentTime;
+      }
+    }
+
+    await PlaybackSyncService.pause(room.id, curTime, user?.id);
   };
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setCurrentTime(val);
-    if (!currentIsHost && playerRef.current) {
-      return;
-    }
-    if (playerRef.current) {
-      playerRef.current.currentTime = val;
+    
+    // Smooth immediate scrubbing on active client player
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    if (isYouTube) {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+        try {
+          ytPlayerRef.current.seekTo(val, true);
+        } catch (error) {}
+      }
+    } else {
+      if (playerRef.current) {
+        playerRef.current.currentTime = val;
+      }
     }
   };
 
   const handleSliderRelease = async () => {
-    if (!room || !currentIsHost || !playerRef.current) return;
-    await PlaybackSyncService.seek(room.id, currentTime, user?.id);
+    if (!room || !currentIsHost) return;
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    
+    let curTime = currentTime;
+    if (isYouTube) {
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === 'function') {
+        curTime = ytPlayerRef.current.getCurrentTime() || 0;
+      }
+    } else {
+      if (playerRef.current) {
+        curTime = playerRef.current.currentTime;
+      }
+    }
+
+    await PlaybackSyncService.seek(room.id, curTime, user?.id);
   };
 
   const handleTimeUpdate = () => {
@@ -718,10 +791,12 @@ export default function RoomPage() {
         playerVars: {
           autoplay: isPlaying ? 1 : 0,
           start: Math.floor(currentTime),
-          controls: currentIsHost ? 1 : 0,
-          disablekb: currentIsHost ? 0 : 1,
+          controls: 0, // Always hide native controls
+          disablekb: 1, // Disable keyboard hotkeys
           modestbranding: 1,
           rel: 0,
+          playsinline: 1,
+          enablejsapi: 1,
           origin: typeof window !== 'undefined' ? window.location.origin : '',
         },
         events: {
@@ -735,31 +810,45 @@ export default function RoomPage() {
             event.target.seekTo(currentTime, true);
           },
           onStateChange: (event: any) => {
+            const stateCode = event.data;
+            if (stateCode === 1) {
+              setMediaStatus('Playing');
+              setIsPlaying(true);
+            } else if (stateCode === 2) {
+              setMediaStatus('Paused');
+              setIsPlaying(false);
+            } else if (stateCode === 3) {
+              setMediaStatus('Buffering');
+            } else if (stateCode === 0) {
+              setMediaStatus('Ended');
+            }
+
             if (!currentIsHost) return;
             if (isUpdatingFromRemote.current) return;
 
             // Player state tags: 1 = PLAYING, 2 = PAUSED, 0 = ENDED
-            if (event.data === 1) {
-              setIsPlaying(true);
+            if (stateCode === 1) {
               const cur = ytPlayerRef.current?.getCurrentTime() || 0;
               PlaybackSyncService.play(room?.id || '', cur, user?.id);
-            } else if (event.data === 2) {
-              setIsPlaying(false);
+            } else if (stateCode === 2) {
               const cur = ytPlayerRef.current?.getCurrentTime() || 0;
               PlaybackSyncService.pause(room?.id || '', cur, user?.id);
-            } else if (event.data === 0) {
+            } else if (stateCode === 0) {
               handleMediaEnded();
             }
           },
           onError: (event: any) => {
             const code = event.data;
             console.warn("YouTube embedding handshake error:", code);
+            setYoutubeFailed(true);
             if (code === 101 || code === 150) {
-              setUrlError("Embed Allowed Blocked: YouTube video creator does not permit remote player embeds.");
-              setYoutubeFailed(true);
+              setShowEmbedToast(true);
+              // Auto hide toast after 8 seconds
+              setTimeout(() => {
+                setShowEmbedToast(false);
+              }, 8000);
             } else {
               setUrlError(`YouTube playback event reported error code: ${code}`);
-              setYoutubeFailed(true);
             }
           }
         }
@@ -1695,85 +1784,47 @@ export default function RoomPage() {
 
             {/* Header control buttons */}
             <div className="flex flex-wrap items-center gap-2 self-start sm:self-center shrink-0">
-              
-              {/* THEME SELECTION BAR */}
-              <div className="relative" id="theme-selector-container">
+                           {/* COMPACT THEME SELECTOR INSIDE HEADER (AUTO RESIZES / ALWAYS FULLY VISIBLE) */}
+              <div id="theme-selector-container" className="flex items-center gap-1 bg-stone-100 dark:bg-stone-850 p-1 rounded-xl border border-stone-200 dark:border-stone-800 shrink-0 font-mono text-[10px]">
                 <button
-                  onClick={() => setShowThemeMenu(!showThemeMenu)}
-                  className={`p-1.5 rounded-xl border flex items-center justify-center transition active:scale-95 cursor-pointer ${
-                    resolvedTheme === 'dark'
-                      ? 'bg-stone-850 border-stone-800 text-stone-300 hover:text-white hover:bg-stone-800'
-                      : 'bg-stone-100 border-stone-200 text-stone-600 hover:text-stone-900 hover:bg-stone-200'
+                  type="button"
+                  onClick={() => setTheme('light')}
+                  className={`p-1.5 rounded-lg transition-all text-[9px] flex items-center gap-1 px-2 cursor-pointer ${
+                    theme === 'light'
+                      ? 'bg-white dark:bg-stone-750 text-amber-600 font-bold shadow-sm'
+                      : 'text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-200/40 dark:hover:bg-stone-800/40'
                   }`}
-                  title="Change Theme Mode"
+                  title="Light mode"
                 >
-                  {theme === 'light' && <Sun className="w-3.5 h-3.5 text-amber-500" />}
-                  {theme === 'dark' && <Moon className="w-3.5 h-3.5 text-purple-405" />}
-                  {theme === 'system' && <Laptop className="w-3.5 h-3.5 text-cyan-505" />}
+                  <Sun className="w-3 h-3 text-amber-500 font-bold" />
+                  <span className="hidden xs:inline">LIGHT</span>
                 </button>
-
-                <AnimatePresence>
-                  {showThemeMenu && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setShowThemeMenu(false)}></div>
-                      <motion.div
-                        initial={{ opacity: 0, y: 8, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 8, scale: 0.95 }}
-                        className={`absolute right-0 mt-2 w-36 rounded-xl shadow-xl z-50 p-1.5 border font-mono text-[10px] font-bold ${
-                          resolvedTheme === 'dark'
-                            ? 'bg-stone-900 border-stone-800 text-stone-200'
-                            : 'bg-white border-stone-200 text-stone-800'
-                        }`}
-                      >
-                        <button
-                          onClick={() => {
-                            setTheme('light');
-                            setShowThemeMenu(false);
-                          }}
-                          className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition cursor-pointer ${
-                            theme === 'light'
-                              ? 'bg-amber-500/10 text-amber-500'
-                              : resolvedTheme === 'dark' ? 'hover:bg-stone-800' : 'hover:bg-stone-100'
-                          }`}
-                        >
-                          <Sun className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                          <span>LIGHT</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            setTheme('dark');
-                            setShowThemeMenu(false);
-                          }}
-                          className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition cursor-pointer ${
-                            theme === 'dark'
-                              ? 'bg-purple-500/10 text-purple-400'
-                              : resolvedTheme === 'dark' ? 'hover:bg-stone-800' : 'hover:bg-stone-100'
-                          }`}
-                        >
-                          <Moon className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                          <span>DARK</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            setTheme('system');
-                            setShowThemeMenu(false);
-                          }}
-                          className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition cursor-pointer ${
-                            theme === 'system'
-                              ? 'bg-cyan-500/10 text-cyan-405'
-                              : resolvedTheme === 'dark' ? 'hover:bg-stone-800' : 'hover:bg-stone-100'
-                          }`}
-                        >
-                          <Laptop className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                          <span>SYSTEM</span>
-                        </button>
-                      </motion.div>
-                    </>
-                  )}
-                </AnimatePresence>
+                <button
+                  type="button"
+                  onClick={() => setTheme('dark')}
+                  className={`p-1.5 rounded-lg transition-all text-[9px] flex items-center gap-1 px-2 cursor-pointer ${
+                    theme === 'dark'
+                      ? 'bg-stone-800 dark:bg-stone-750 text-indigo-400 font-bold shadow-sm'
+                      : 'text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-200/40 dark:hover:bg-stone-800/40'
+                  }`}
+                  title="Dark mode"
+                >
+                  <Moon className="w-3 h-3 text-indigo-400 font-bold" />
+                  <span className="hidden xs:inline">DARK</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTheme('system')}
+                  className={`p-1.5 rounded-lg transition-all text-[9px] flex items-center gap-1 px-2 cursor-pointer ${
+                    theme === 'system'
+                      ? 'bg-stone-200 dark:bg-stone-750 text-teal-400 font-bold shadow-sm'
+                      : 'text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-200/40 dark:hover:bg-stone-800/40'
+                  }`}
+                  title="System theme"
+                >
+                  <Laptop className="w-3 h-3 text-teal-400 font-bold" />
+                  <span className="hidden xs:inline">SYSTEM</span>
+                </button>
               </div>
 
               <button
@@ -1846,9 +1897,9 @@ export default function RoomPage() {
         )}
 
         {/* GRID CONTAINER FOR WORKSPACE */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full items-start col-span-full">
+        <div id="workspace-grid" className="flex flex-col lg:grid lg:grid-cols-3 gap-6 w-full items-start col-span-full">
           {/* LEFT SIDEBAR: MEDIA FIRST (Columns 1 & 2) */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="contents lg:block lg:space-y-6 lg:col-span-2">
 
             {/* 2. ACTIVE SPACE / MEDIA PLAYER CARD */}
             {(() => {
@@ -1856,7 +1907,7 @@ export default function RoomPage() {
           const ytId = isYouTube ? getYouTubeId(mediaUrl) : null;
 
           return (
-            <div id="media-player-container" className="bg-white dark:bg-stone-900/40 border border-stone-200 dark:border-stone-850 rounded-2xl p-5 space-y-4 shadow-sm dark:shadow-xl overflow-hidden relative">
+            <div id="media-player-container" className="order-2 lg:order-none bg-white dark:bg-stone-900/40 border border-stone-200 dark:border-stone-850 rounded-2xl p-5 space-y-4 shadow-sm dark:shadow-xl overflow-hidden relative">
               <div className="absolute inset-0 bg-gradient-to-b from-stone-50/20 dark:from-stone-900/60 to-transparent pointer-events-none z-0"></div>
 
               {/* Playing track metadata */}
@@ -1866,11 +1917,36 @@ export default function RoomPage() {
                     <Sparkles className="w-2.5 h-2.5 animate-bounce text-amber-500" /> NOW PLAYING
                   </span>
                   <h2 className="text-sm font-extrabold text-stone-950 dark:text-white truncate max-w-sm sm:max-w-md">
-                    {isYouTube ? (queue.length > 0 ? queue[0].title : 'YouTube Video Stream') : (mediaUrl ? mediaUrl.substring(mediaUrl.lastIndexOf('/') + 1) : 'No Stream Loaded')}
+                    {isYouTube ? (queue.length > 0 ? queue[0].title : (ytPreview?.title || 'YouTube Video Stream')) : (mediaUrl ? mediaUrl.substring(mediaUrl.lastIndexOf('/') + 1) : 'No Stream Loaded')}
                   </h2>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className={`inline-flex items-center gap-1.5 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md ${
+                      mediaStatus === 'Playing' ? 'bg-emerald-500/10 text-emerald-550 dark:text-emerald-400 border border-emerald-500/20' :
+                      mediaStatus === 'Paused' ? 'bg-amber-500/10 text-amber-550 dark:text-amber-400 border border-amber-500/20' :
+                      mediaStatus === 'Buffering' ? 'bg-cyan-500/10 text-cyan-550 dark:text-cyan-400 border border-cyan-500/20 animate-pulse' :
+                      mediaStatus === 'Ended' ? 'bg-stone-500/10 text-stone-600 dark:text-stone-300 border border-stone-200 dark:border-stone-800' :
+                      mediaStatus === 'Live' ? 'bg-rose-500/15 text-rose-600 dark:text-rose-450 border border-rose-500/25' :
+                      'bg-stone-100 dark:bg-stone-900 text-stone-500 dark:text-stone-400'
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        mediaStatus === 'Playing' ? 'bg-emerald-500 animate-pulse' :
+                        mediaStatus === 'Live' ? 'bg-rose-500 animate-pulse' :
+                        mediaStatus === 'Buffering' ? 'bg-cyan-500 animate-spin' :
+                        mediaStatus === 'Paused' ? 'bg-amber-500' :
+                        'bg-stone-400'
+                      }`} />
+                      <span>{mediaStatus.toUpperCase()}</span>
+                    </span>
+                    {youtubeFailed && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-rose-500 font-mono font-bold bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-md" title="Embedding restricted by creator">
+                        <ShieldAlert className="w-3.5 h-3.5" />
+                        <span>EMBED RESTRICTED</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
                 
-                <div className="shrink-0">
+                <div className="shrink-0 self-start">
                   <span className={`text-[9px] font-mono font-bold uppercase px-2.5 py-1 rounded-lg ${currentIsHost ? 'bg-rose-500/10 text-rose-500 dark:text-rose-405 border border-rose-500/20' : 'bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-850 text-stone-600 dark:text-stone-400'}`}>
                     {currentIsHost ? 'HOST CONSOLE' : 'LISTENER'}
                   </span>
@@ -1882,20 +1958,45 @@ export default function RoomPage() {
                 {mediaUrl ? (
                   youtubeFailed ? (
                     /* Embed restricted fallback UI state */
-                    <div id="mediacard-failed-fallback" className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-3 bg-stone-900 text-stone-200">
-                      <div className="w-12 h-12 bg-rose-500/15 border border-rose-500/20 text-rose-400 rounded-2xl flex items-center justify-center animate-bounce">
-                        <ShieldAlert className="w-6 h-6" />
+                    <div id="mediacard-failed-fallback" className="w-full h-full flex flex-col items-center justify-center p-4 text-center space-y-4 bg-stone-950 text-stone-200 relative overflow-hidden">
+                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(239,68,68,0.06),transparent_70%)] pointer-events-none z-0"></div>
+                      
+                      {/* Video design graphic wrapper */}
+                      <div className="relative w-36 h-20 rounded-xl overflow-hidden border border-rose-500/20 shadow-2xl z-10 shrink-0 mx-auto">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img 
+                          src={ytPreview?.thumbnailUrl || (queue.length > 0 ? queue[0].thumbnail_url : '') || `https://img.youtube.com/vi/${getYouTubeId(mediaUrl || '')}/hqdefault.jpg`} 
+                          alt="Video Thumbnail" 
+                          className="w-full h-full object-cover brightness-75 filter blur-[1px]"
+                        />
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                          <Play className="w-6 h-6 text-rose-550 fill-rose-550/20 animate-pulse" />
+                        </div>
                       </div>
-                      <div className="space-y-1">
-                        <h3 className="text-xs font-bold text-stone-205 uppercase tracking-wider font-mono">Restricted Handshake Detected</h3>
-                        <p className="text-[11px] text-stone-400 leading-relaxed max-w-xs mx-auto">
-                          Owner has disabled remote player embedding for this video.
-                        </p>
+
+                      <div className="space-y-1 z-10 relative max-w-sm px-4 shrink-0">
+                        <span className="text-[10px] bg-rose-550/15 border border-rose-550/25 text-rose-455 font-mono font-bold px-1.5 py-0.5 rounded">EMBEDDING RESTRICTED</span>
+                        <p className="text-xs font-extrabold text-white truncate max-w-xs">{ytPreview?.title || (queue.length > 0 ? queue[0].title : 'Restricted Content Stream')}</p>
+                        <p className="text-[9px] text-stone-400 font-medium font-mono uppercase tracking-wider">Channel: {ytPreview?.channelName || 'YouTube Creator'}</p>
                       </div>
-                      <div className="pt-2 text-[10px] text-stone-400 text-left bg-stone-950/70 p-3 rounded-lg border border-stone-850 space-y-1 w-full max-w-xs font-mono">
-                        <p className="text-amber-500 font-bold uppercase mb-1">Actions to Resolve:</p>
-                        <p>1. Copy direct sample track preset below.</p>
-                        <p>2. Try loading a different YouTube stream.</p>
+
+                      <div className="flex gap-2.5 z-10 relative pt-1.5 shrink-0 justify-center">
+                        <a
+                          href={mediaUrl || '#'}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer flex items-center gap-1 shrink-0"
+                        >
+                          <span>Open on YouTube</span>
+                        </a>
+                        {currentIsHost && (
+                          <button
+                            onClick={() => setIsHostToolsOpen(true)}
+                            className="px-3.5 py-1.5 bg-stone-850 hover:bg-stone-750 text-stone-200 border border-stone-805 rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer shrink-0"
+                          >
+                            Try Another Video
+                          </button>
+                        )}
                       </div>
                     </div>
                   ) : isYouTube && ytId ? (
@@ -1936,6 +2037,9 @@ export default function RoomPage() {
                           onTimeUpdate={handleTimeUpdate}
                           onLoadedMetadata={handleLoadedMetadata}
                           onEnded={handleMediaEnded}
+                          onPlay={() => setMediaStatus('Playing')}
+                          onPause={() => setMediaStatus('Paused')}
+                          onWaiting={() => setMediaStatus('Buffering')}
                         />
                       </div>
                     ) : (
@@ -1948,6 +2052,9 @@ export default function RoomPage() {
                         onTimeUpdate={handleTimeUpdate}
                         onLoadedMetadata={handleLoadedMetadata}
                         onEnded={handleMediaEnded}
+                        onPlay={() => setMediaStatus('Playing')}
+                        onPause={() => setMediaStatus('Paused')}
+                        onWaiting={() => setMediaStatus('Buffering')}
                       />
                     )
                   )
@@ -2044,7 +2151,7 @@ export default function RoomPage() {
                 </div>
 
                 {/* Volume block indicator */}
-                <div className="flex items-center space-x-2 text-xs text-stone-450 z-10">
+                <div className="flex items-center space-x-2 text-xs text-stone-450 z-10 font-mono">
                   <button
                     onClick={() => {
                       const nextMute = !isMuted;
@@ -2052,11 +2159,23 @@ export default function RoomPage() {
                       if (playerRef.current) {
                         playerRef.current.muted = nextMute;
                       }
+                      if (ytPlayerRef.current) {
+                        if (nextMute) {
+                          if (typeof ytPlayerRef.current.mute === 'function') ytPlayerRef.current.mute();
+                        } else {
+                          if (typeof ytPlayerRef.current.unMute === 'function') {
+                            ytPlayerRef.current.unMute();
+                            if (typeof ytPlayerRef.current.setVolume === 'function') {
+                              ytPlayerRef.current.setVolume(Math.floor(videoVolume * 100));
+                            }
+                          }
+                        }
+                      }
                     }}
                     id="mute-unmute-btn"
                     className="p-2 bg-stone-900 hover:bg-stone-850 rounded-xl border border-stone-850 cursor-pointer transition text-stone-300"
                   >
-                    {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500 animate-bounce" /> : <Volume2 className="w-3.5 h-3.5 text-stone-400" />}
+                    {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500 animate-pulse" /> : <Volume2 className="w-3.5 h-3.5 text-stone-400" />}
                   </button>
                   <input
                     id="volume-slider-range"
@@ -2068,11 +2187,22 @@ export default function RoomPage() {
                     onChange={(e) => {
                       const v = parseFloat(e.target.value);
                       setVideoVolume(v);
+                      setIsMuted(false);
                       if (playerRef.current) {
                         playerRef.current.volume = v;
                         playerRef.current.muted = false;
                       }
-                      setIsMuted(false);
+                      if (ytPlayerRef.current) {
+                        if (typeof ytPlayerRef.current.unMute === 'function') ytPlayerRef.current.unMute();
+                        if (typeof ytPlayerRef.current.setVolume === 'function') {
+                          ytPlayerRef.current.setVolume(Math.floor(v * 100));
+                        }
+                      }
+
+                      // Emit rapid time-seek update from volume changes if host to satisfy sync table constraints immediately
+                      if (currentIsHost && room) {
+                        PlaybackSyncService.updateTime(room.id, currentTime, duration || 180, user?.id).catch(() => {});
+                      }
                     }}
                     className="w-14 accent-amber-500 h-1 bg-stone-850 rounded appearance-none cursor-pointer"
                   />
@@ -2084,7 +2214,7 @@ export default function RoomPage() {
 
         {/* Collapsible Host Tools underneath player on the left column */}
         {currentIsHost && (
-          <div id="host-tools-container" className="bg-white dark:bg-stone-900/40 border border-stone-200 dark:border-stone-850 rounded-2xl overflow-hidden shadow-sm dark:shadow-xl transition-colors duration-200">
+          <div id="host-tools-container" className="order-6 lg:order-none bg-white dark:bg-stone-900/40 border border-stone-200 dark:border-stone-850 rounded-2xl overflow-hidden shadow-sm dark:shadow-xl transition-colors duration-200">
             <button
               onClick={() => setIsHostToolsOpen(!isHostToolsOpen)}
               className="w-full flex items-center justify-between p-4 bg-stone-50 dark:bg-stone-900/80 hover:bg-stone-100 dark:hover:bg-stone-850/60 transition cursor-pointer text-left"
@@ -2304,10 +2434,10 @@ export default function RoomPage() {
           </div> {/* END OF LEFT SIDEBAR col-span-2 */}
 
           {/* RIGHT SIDEBAR: SOCIAL & SYSTEM UTILITIES (Column 3) */}
-          <div className="space-y-6">
+          <div className="contents lg:block lg:space-y-6">
 
         {/* 3. PARTICIPANTS LIST */}
-        <div id="participants-container" className="bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3.5 shadow-sm dark:shadow-none transition-colors duration-200">
+        <div id="participants-container" className="order-3 lg:order-none bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3.5 shadow-sm dark:shadow-none transition-colors duration-200">
           <div className="flex items-center justify-between pb-1.5 border-b border-stone-200 dark:border-stone-850/60">
             <div className="flex items-center space-x-2">
               <Users className="w-4 h-4 text-amber-500" />
@@ -2421,7 +2551,7 @@ export default function RoomPage() {
             </AnimatePresence>
           </div>
               {/* 4. LIVE TEXT CHAT PANEL */}
-        <div id="live-chat-container" className="bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3 flex flex-col min-h-[224px] shadow-sm dark:shadow-none transition-colors duration-200">
+        <div id="live-chat-container" className="order-4 lg:order-none bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3 flex flex-col min-h-[224px] shadow-sm dark:shadow-none transition-colors duration-200">
           <div className="flex items-center justify-between pb-1.5 border-b border-stone-200 dark:border-stone-850/60 shrink-0">
             <div className="flex items-center space-x-2">
               <MessageSquare className="w-4 h-4 text-amber-500" />
@@ -2527,7 +2657,7 @@ export default function RoomPage() {
         </div>    </div>
 
         {/* 5. MEDIA QUEUE CARD */}
-        <div id="media-queue-container" className="bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3 flex flex-col shadow-sm dark:shadow-none transition-colors duration-200">
+        <div id="media-queue-container" className="order-5 lg:order-none bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3 flex flex-col shadow-sm dark:shadow-none transition-colors duration-200">
           <div className="flex items-center justify-between pb-1.5 border-b border-stone-200 dark:border-stone-850/60 font-sans">
             <div className="flex items-center space-x-2">
               <ListMusic className="w-4 h-4 text-amber-500 animate-pulse" />
