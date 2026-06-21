@@ -41,7 +41,9 @@ import {
   ArrowUp,
   ArrowDown,
   PlusCircle,
-  Sparkles
+  Sparkles,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PlaybackState } from '@/types/playback';
@@ -118,6 +120,18 @@ export default function RoomPage() {
   const [unreadCount, setUnreadCount] = React.useState(0);
   const [typingUsers, setTypingUsers] = React.useState<string[]>([]);
   const [isTyping, setIsTyping] = React.useState(false);
+  
+  // UX Phase 3.2 Refinement States
+  const [isHostToolsOpen, setIsHostToolsOpen] = React.useState(false);
+  const [youtubeFailed, setYoutubeFailed] = React.useState(false);
+  const [urlError, setUrlError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (youtubeFailed) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setYoutubeFailed(false);
+    }
+  }, [mediaUrl, youtubeFailed]);
   
   const playerRef = React.useRef<HTMLVideoElement | null>(null);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
@@ -542,12 +556,28 @@ export default function RoomPage() {
     return (match && match[2].length === 11) ? match[2] : null;
   };
 
+  const validateMediaUrl = (url: string): boolean => {
+    if (!url) return false;
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch (e) {
+      return false;
+    }
+  };
+
   // QUEUE OPERATIONS
   const handleAddMediaToQueue = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!room || !queueUrlInput.trim()) return;
 
     const url = queueUrlInput.trim();
+    if (!validateMediaUrl(url)) {
+      setUrlError("Invalid URL. Please enter a valid http/https link to queue.");
+      setTimeout(() => setUrlError(null), 5000);
+      return;
+    }
+
     let finalTitle = queueTitleInput.trim();
     const isYt = url.includes('youtube.com') || url.includes('youtu.be') || url.includes('/embed/');
     const isAudio = url.endsWith('.mp3') || url.includes('Helix') || url.includes('audio');
@@ -737,6 +767,11 @@ export default function RoomPage() {
 
   const handleLoadMedia = async (url: string, type: 'video' | 'audio') => {
     if (!room || !currentIsHost) return;
+    if (url && !validateMediaUrl(url)) {
+      setUrlError("Invalid URL. Please enter a valid http/https link to load.");
+      setTimeout(() => setUrlError(null), 5000);
+      return;
+    }
     
     let mediaDuration = 596; 
     if (url.includes('Sintel')) mediaDuration = 653;
@@ -1060,6 +1095,23 @@ export default function RoomPage() {
     });
   };
 
+  const shareRoom = async () => {
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: `Join SyncWave Room: ${room?.name || 'Sync Listening'}`,
+          text: `Join my SyncWave real-time synchronized listening lobby!`,
+          url: window.location.href,
+        });
+        writeLog('info', 'Share App', 'Successfully shared room via standard browser api');
+      } catch (err) {
+        copyInviteLink();
+      }
+    } else {
+      copyInviteLink();
+    }
+  };
+
   // Render Supabase initialization error card if auth config is missing
   if (!supabaseConnected) {
     return <SupabaseSetupNeeded />;
@@ -1278,24 +1330,24 @@ export default function RoomPage() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.05),transparent_80%)] pointer-events-none z-0"></div>
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-stone-800 to-transparent"></div>
 
-      <div className="max-w-3xl mx-auto w-full px-4 pt-6 space-y-6 relative z-10">
+      <div className="max-w-6xl mx-auto w-full px-4 pt-6 space-y-6 relative z-10">
 
         {/* 1. ROOM HEADER CARD */}
-        <div id="room-header-container" className="bg-stone-900/40 backdrop-blur-md rounded-2xl border border-stone-850 p-5 space-y-4">
+        <div id="room-header-container" className="bg-stone-900/40 backdrop-blur-md rounded-2xl border border-stone-850 p-4 space-y-3.5 col-span-full">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center space-x-3.5">
-              <div className="p-2.5 bg-gradient-to-br from-amber-500 to-rose-500 rounded-xl text-stone-950 shadow-lg shadow-amber-500/10 shrink-0">
+            <div className="flex items-center space-x-3 min-w-0">
+              <div className="p-2 bg-gradient-to-br from-amber-500 to-rose-500 rounded-xl text-stone-950 shadow-lg shadow-amber-500/10 shrink-0">
                 <Radio className="w-5 h-5 animate-pulse" />
               </div>
               <div className="space-y-0.5 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-lg font-extrabold tracking-tight text-white">{room.name}</h1>
-                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                    {room.slug}
+                  <h1 className="text-base font-extrabold tracking-tight text-white">{room.name}</h1>
+                  <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    CODE: {room.slug}
                   </span>
                   {currentIsHost && (
-                    <span className="flex items-center gap-1 text-[9px] bg-rose-500/10 border border-rose-500/20 text-rose-400 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                      <Crown className="w-2.5 h-2.5" /> HOST
+                    <span className="flex items-center gap-1 text-[8px] bg-rose-500/10 border border-rose-500/20 text-rose-455 font-extrabold px-1.5 py-0.5 rounded-full uppercase tracking-wider animate-pulse">
+                      <Crown className="w-2.5 h-2.5" /> HOST CONTROL
                     </span>
                   )}
                 </div>
@@ -1310,25 +1362,33 @@ export default function RoomPage() {
               <button
                 onClick={copyInviteLink}
                 id="copy-invite-btn"
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-stone-850 hover:bg-stone-800 border border-stone-850 rounded-xl text-xs text-stone-300 font-semibold transition cursor-pointer hover:border-stone-700 active:scale-95 whitespace-nowrap"
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-850 hover:bg-stone-800 border border-stone-850 rounded-xl text-xs text-stone-300 font-semibold transition cursor-pointer hover:border-stone-700 active:scale-95 whitespace-nowrap"
               >
                 {copiedLink ? (
                   <>
                     <Check className="w-3.5 h-3.5 text-green-400 animate-bounce" />
-                    <span className="text-green-400">Copied!</span>
+                    <span className="text-green-405">Copied!</span>
                   </>
                 ) : (
                   <>
                     <Copy className="w-3.5 h-3.5 text-stone-400" />
-                    <span>Invite Link</span>
+                    <span>Copy Code</span>
                   </>
                 )}
               </button>
 
               <button
+                onClick={shareRoom}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 rounded-xl text-xs text-amber-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Share Lounge</span>
+              </button>
+
+              <button
                 onClick={leaveRoom}
                 id="leave-room-btn"
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-stone-850 hover:bg-rose-950/30 border border-stone-850 hover:border-rose-900/30 rounded-xl text-xs text-stone-355 hover:text-rose-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-850 hover:bg-rose-950/30 border border-stone-850 hover:border-rose-900/30 rounded-xl text-xs text-stone-350 hover:text-rose-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Leave</span>
@@ -1337,26 +1397,44 @@ export default function RoomPage() {
           </div>
 
           {/* Connected state rail & stats */}
-          <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-stone-400 border-t border-stone-850/60 pt-3">
+          <div className="flex flex-wrap items-center gap-4 text-[11px] font-mono text-stone-400 border-t border-stone-850/60 pt-3">
             <div className="flex items-center space-x-1.5">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
-              <span className="text-stone-300 font-semibold uppercase tracking-wider text-[10px]">Realtime Cluster: Connected</span>
+              <span className="text-stone-300 font-semibold uppercase tracking-wider text-[9px]">Cluster: Sync Active</span>
             </div>
             <div className="h-3 w-px bg-stone-850 hidden sm:block" />
             <div className="flex items-center space-x-1.5 text-stone-400">
               <Users className="w-3.5 h-3.5 text-amber-500" />
-              <span>{members.length} listening together</span>
+              <span>{members.length} member{members.length === 1 ? '' : 's'} connected</span>
             </div>
-            {members.length === 1 && (
-              <div className="text-[9px] text-amber-400/80 animate-pulse bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/10 font-sans tracking-wide">
-                Invite friends to sync together!
-              </div>
-            )}
           </div>
         </div>
 
-        {/* 2. ACTIVE SPACE / MEDIA PLAYER CARD */}
-        {(() => {
+        {/* 1.5 ALONE CTA FOR ROOM */}
+        {members.length === 1 && (
+          <div className="bg-amber-500/5 border border-amber-500/10 rounded-2xl p-4 text-center space-y-2 transition-all col-span-full">
+            <Sparkles className="w-5 h-5 text-amber-500 mx-auto animate-pulse" />
+            <p className="text-sm font-bold text-white">Nobody else is here yet.</p>
+            <p className="text-xs text-stone-450 leading-relaxed max-w-md mx-auto">
+              Invite friends to experience SyncWave together with real-time media sync!
+            </p>
+            <button
+              onClick={copyInviteLink}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              <span>{copiedLink ? "COPIED INVITE CODE!" : "COPY INVITE LINK"}</span>
+            </button>
+          </div>
+        )}
+
+        {/* GRID CONTAINER FOR WORKSPACE */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full items-start col-span-full">
+          {/* LEFT SIDEBAR: MEDIA FIRST (Columns 1 & 2) */}
+          <div className="lg:col-span-2 space-y-6">
+
+            {/* 2. ACTIVE SPACE / MEDIA PLAYER CARD */}
+            {(() => {
           const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
           const ytId = isYouTube ? getYouTubeId(mediaUrl) : null;
 
@@ -1571,169 +1649,243 @@ export default function RoomPage() {
                   />
                 </div>
               </div>
-
-              {/* Host Quick Loads */}
-              {currentIsHost && (
-                <div className="p-4 bg-stone-950/60 rounded-xl border border-stone-850 space-y-3 z-10 relative">
-                  <div className="flex items-center justify-between font-mono text-[9px]">
-                    <span className="text-stone-450">LOAD CONSOLE / PRESET CHANNELS</span>
-                    <span className="text-amber-500 font-extrabold uppercase">HOST ONLY</span>
-                  </div>
-                  
-                  <form 
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (!customUrlInput.trim()) return;
-                      const val = customUrlInput.trim();
-                      const isAudio = val.endsWith('.mp3') || val.includes('Helix') || val.includes('audio');
-                      handleLoadMedia(val, isAudio ? 'audio' : 'video');
-                      setCustomUrlInput('');
-                    }}
-                    className="flex gap-2"
-                  >
-                    <input
-                      id="preset-url-input"
-                      type="text"
-                      placeholder="Paste stream link (Big Buck Bunny, Helix Audio, YouTube...)"
-                      value={customUrlInput}
-                      onChange={(e) => setCustomUrlInput(e.target.value)}
-                      className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3.5 py-2.5 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
-                    />
-                    <button
-                      type="submit"
-                      id="submit-stream-btn"
-                      className="bg-amber-500 hover:bg-amber-600 text-stone-950 text-xs font-bold px-4 rounded-lg transition cursor-pointer"
-                    >
-                      LOAD
-                    </button>
-                  </form>
-
-                  <div className="flex gap-1.5 overflow-x-auto py-1 scrollbar-none">
-                    {MEDIA_PRESETS.map((p, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => handleLoadMedia(p.url, p.type as any)}
-                        className="px-2.5 py-1.5 bg-stone-900 border border-stone-850 hover:bg-stone-800 text-[9px] font-mono text-stone-400 hover:text-stone-200 rounded-lg transition cursor-pointer shrink-0"
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           );
         })()}
 
+        {/* Collapsible Host Tools underneath player on the left column */}
+        {currentIsHost && (
+          <div id="host-tools-container" className="bg-stone-900/40 border border-stone-850 rounded-2xl overflow-hidden shadow-xl">
+            <button
+              onClick={() => setIsHostToolsOpen(!isHostToolsOpen)}
+              className="w-full flex items-center justify-between p-4 bg-stone-900/80 hover:bg-stone-850/60 transition cursor-pointer text-left"
+            >
+              <div className="flex items-center gap-2.5">
+                <Sliders className="w-4 h-4 text-amber-500 animate-pulse" />
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Host Control Center</h3>
+                  <p className="text-[10px] text-stone-400 font-mono">Stream Overrides, Preset Channels & Playback Queue Schedulers</p>
+                </div>
+              </div>
+              <div>
+                {isHostToolsOpen ? (
+                  <ChevronUp className="w-4 h-4 text-stone-400 font-bold" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-stone-400 font-bold" />
+                )}
+              </div>
+            </button>
+            <AnimatePresence>
+              {isHostToolsOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="border-t border-stone-850 p-4 space-y-4 bg-stone-950/20"
+                >
+                  {/* URL / input errors wrapper */}
+                  {urlError && (
+                    <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-450 font-semibold animate-pulse flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 shrink-0 text-rose-500" />
+                      <span>{urlError}</span>
+                    </div>
+                  )}
+
+                  {/* Direct Load override */}
+                  <div className="space-y-2">
+                    <h4 className="text-[10px] font-bold text-amber-400 uppercase font-mono tracking-widest flex items-center gap-1">
+                      <span>● Quick Stream override</span>
+                    </h4>
+                    <form 
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!customUrlInput.trim()) return;
+                        const val = customUrlInput.trim();
+                        const isAudio = val.endsWith('.mp3') || val.includes('Helix') || val.includes('audio');
+                        handleLoadMedia(val, isAudio ? 'audio' : 'video');
+                        setCustomUrlInput('');
+                      }}
+                      className="flex gap-2"
+                    >
+                      <input
+                        id="preset-url-input"
+                        type="text"
+                        placeholder="Paste immediate direct stream URL or YouTube link..."
+                        value={customUrlInput}
+                        onChange={(e) => setCustomUrlInput(e.target.value)}
+                        className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                      />
+                      <button
+                        type="submit"
+                        id="submit-stream-btn"
+                        className="bg-amber-500 hover:bg-amber-600 text-stone-950 text-xs font-bold px-4 rounded-lg transition cursor-pointer font-bold uppercase"
+                      >
+                        LOAD
+                      </button>
+                    </form>
+
+                    <div className="flex gap-1.5 overflow-x-auto py-1 scrollbar-none">
+                      {MEDIA_PRESETS.map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleLoadMedia(p.url, p.type as any)}
+                          className="px-2.5 py-1.5 bg-stone-900 border border-stone-850 hover:border-stone-750 text-[9px] font-mono text-stone-400 hover:text-stone-200 rounded-lg transition cursor-pointer shrink-0"
+                        >
+                          {p.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Queue playlist form */}
+                  <div className="space-y-2 pt-3 border-t border-stone-850/60">
+                    <h4 className="text-[10px] font-bold text-amber-400 uppercase font-mono tracking-widest">
+                      <span>● Append Scheduled Stream to Playlist Queue</span>
+                    </h4>
+                    <form onSubmit={handleAddMediaToQueue} className="space-y-2">
+                      <input
+                        type="text"
+                        required
+                        placeholder="Paste direct audio/video streaming path or YouTube URL..."
+                        value={queueUrlInput}
+                        onChange={(e) => setQueueUrlInput(e.target.value)}
+                        className="w-full bg-stone-900 border border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Enter Optional Track Custom Title..."
+                          value={queueTitleInput}
+                          onChange={(e) => setQueueTitleInput(e.target.value)}
+                          className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                        />
+                        <button
+                          type="submit"
+                          className="bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-bold px-4 rounded-lg transition whitespace-nowrap cursor-pointer hover:shadow-lg active:scale-95"
+                        >
+                          ADD TO QUEUE
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
+          </div> {/* END OF LEFT SIDEBAR col-span-2 */}
+
+          {/* RIGHT SIDEBAR: SOCIAL & SYSTEM UTILITIES (Column 3) */}
+          <div className="space-y-6">
+
         {/* 3. PARTICIPANTS LIST */}
-        <div id="participants-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-5 space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-stone-850/60">
+        <div id="participants-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-4 space-y-3.5">
+          <div className="flex items-center justify-between pb-1.5 border-b border-stone-850/60">
             <div className="flex items-center space-x-2">
-              <Users className="w-4 h-4 text-amber-500 animate-pulse" />
-              <span className="text-xs font-mono font-bold text-stone-205 uppercase tracking-widest">Active Members ({members.length})</span>
+              <Users className="w-4 h-4 text-amber-500" />
+              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Listeners ({members.length})</span>
             </div>
-            <span className="text-[10px] font-mono text-stone-500 uppercase">Interactive Rail</span>
+            <span className="text-[10px] font-mono text-stone-550 uppercase tracking-wide">Sync Tribe</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="flex flex-wrap gap-2 py-1 items-center">
             <AnimatePresence>
               {members.map((member) => {
                 const memberIsHost = member.user_id === room.host_id;
                 const memberIsMe = member.id === currentMember?.id;
                 const nickname = member.profiles?.display_name || member.display_name || 'Lounge Guest';
-                const avatar = member.profiles?.avatar_url || `https://picsum.photos/seed/${nickname}/150`;
+                const avatar = member.profiles?.avatar_url || `https://picsum.photos/seed/${encodeURIComponent(nickname)}/100`;
 
-                // Listening badge metrics
-                let statusBadge = "LISTENING";
-                let statusColor = "bg-emerald-500/10 border-emerald-500/20 text-emerald-400";
+                let statusBadge = "Idle";
+                let statusDot = "bg-stone-500"; // Idle
                 
-                if (!isPlaying) {
-                  statusBadge = "LOBBY";
-                  statusColor = "bg-amber-500/10 border-amber-500/20 text-amber-400 font-bold";
+                if (isPlaying) {
+                  statusBadge = "Listening";
+                  statusDot = "bg-emerald-500 animate-pulse";
+                } else {
+                  statusBadge = "In Lobby";
+                  statusDot = "bg-amber-500";
                 }
 
                 return (
                   <motion.div
                     key={member.id}
                     layoutId={`member-card-${member.id}`}
-                    initial={{ opacity: 0, scale: 0.95 }}
+                    initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className={`flex items-center justify-between p-3.5 rounded-xl border transition-all ${
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    className={`group relative flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full border text-[11px] font-medium transition cursor-help select-none ${
                       memberIsMe 
-                        ? 'bg-amber-500/5 border-amber-500/30 shadow-lg shadow-amber-500/5' 
-                        : 'bg-stone-900/60 border-stone-850 hover:border-stone-800'
+                        ? 'bg-amber-500/10 border-amber-500/30' 
+                        : 'bg-stone-900/60 border-stone-850 hover:border-stone-750'
                     }`}
                   >
-                    <div className="flex items-center space-x-3 min-w-0">
-                      <div className="relative shrink-0 select-none">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img 
-                          src={avatar} 
-                          alt={nickname} 
-                          className={`w-9 h-9 rounded-xl object-cover border ${
-                            memberIsHost ? 'border-amber-500/60 scale-105 shadow-amber-500/10' : 'border-stone-800'
-                          }`}
-                        />
-                        {memberIsHost && (
-                          <span className="bg-amber-500 p-0.5 rounded-full absolute -top-1.5 -right-1.5 border border-stone-950 text-stone-950 shadow">
-                            <Crown className="w-2.5 h-2.5" />
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-stone-200 truncate leading-tight">
-                            {nickname}
-                          </span>
-                          {memberIsMe && <span className="text-[8px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-extrabold px-1 rounded uppercase shrink-0">YOU</span>}
-                        </div>
-                        
-                        <div className="flex items-center gap-1.5 mt-1">
-                          <span className={`text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded border uppercase leading-none tracking-wide ${statusColor}`}>
-                            {memberIsHost ? 'HOST' : statusBadge}
-                          </span>
-                          <span className="text-[9px] font-mono text-stone-500">
-                            Joined {new Date(member.joined_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                      </div>
+                    {/* Avatar & status circle */}
+                    <div className="relative w-5 h-5 shrink-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img 
+                        src={avatar} 
+                        alt={nickname} 
+                        className={`w-full h-full rounded-full object-cover border ${
+                          memberIsHost ? 'border-amber-500/60' : 'border-stone-800'
+                        }`}
+                      />
+                      <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border-2 border-stone-950 ${statusDot}`} />
                     </div>
 
-                    {/* Mute and Host Action Triggers */}
-                    <div className="flex items-center space-x-1.5 shrink-0 pl-1">
-                      {member.is_muted && (
-                        <span className="p-1 bg-stone-950 border border-rose-500/10 text-rose-455 rounded-lg shrink-0" title="Host Muted">
-                          <MicOff className="w-3 h-3 text-rose-500" />
-                        </span>
-                      )}
+                    {/* Nickname, Host badge */}
+                    <span className="max-w-[75px] truncate font-bold text-stone-200">
+                      {nickname}
+                    </span>
+                    {memberIsHost && <Crown className="w-2.5 h-2.5 text-amber-500 shrink-0" />}
 
+                    {/* Detailed Tooltip overlay on hover */}
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2.5 bg-stone-900 border border-stone-800 text-[10px] text-stone-300 rounded-xl shadow-2xl opacity-0 scale-95 pointer-events-none group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 z-50 space-y-1.5 whitespace-normal">
+                      <p className="font-extrabold text-white text-xs flex items-center gap-1">
+                        {nickname}
+                        {memberIsHost && <span className="text-[8px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-extrabold px-1.5 rounded uppercase leading-none">Host</span>}
+                        {memberIsMe && <span className="text-[8px] bg-rose-500/10 border border-rose-500/20 text-rose-450 font-mono font-extrabold px-1.5 rounded uppercase leading-none">You</span>}
+                      </p>
+                      <p className="text-stone-400 flex items-center gap-1 font-mono uppercase tracking-wider text-[8px]">
+                        <span className={`w-1.5 h-1.5 rounded-full ${statusDot.split(' ')[0]}`}></span>
+                        {memberIsHost ? 'Streaming state' : 'Listening state'}: {statusBadge}
+                      </p>
+                      <p className="text-stone-500 font-mono text-[8px] border-t border-stone-800 pt-1">
+                        Joined: {new Date(member.joined_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+
+                      {/* Quick kick/ban controls inside tooltip for Host */}
                       {currentIsHost && !memberIsHost && (
-                        <div className="flex items-center bg-stone-950 border border-stone-850 p-1 rounded-lg gap-0.5 shadow-sm">
+                        <div className="flex gap-1 pt-1.5 select-auto pointer-events-auto">
                           <button
-                            onClick={() => toggleMuteMember(member.id, member.is_muted)}
-                            className={`p-1 rounded hover:bg-stone-850 hover:text-amber-400 transition cursor-pointer ${member.is_muted ? 'text-amber-500' : 'text-stone-500'}`}
-                            title={member.is_muted ? "Click to Unmute Member" : "Click to Mute Member"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleMuteMember(member.id, member.is_muted);
+                            }}
+                            className={`flex-1 text-[8px] font-bold px-1 py-0.5 rounded flex items-center justify-center gap-0.5 ${member.is_muted ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-300 hover:text-white'}`}
                           >
-                            {member.is_muted ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                            {member.is_muted ? 'UNMUTE' : 'MUTE'}
                           </button>
-                          
                           <button
-                            onClick={() => kickMember(member.id, nickname)}
-                            className="p-1 rounded hover:bg-stone-850 hover:text-orange-400 transition text-stone-550 cursor-pointer"
-                            title="Kick occupant"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              kickMember(member.id, nickname);
+                            }}
+                            className="flex-1 bg-stone-800 hover:bg-orange-950/20 text-stone-300 hover:text-orange-405 text-[8px] font-bold px-1 py-0.5 rounded"
                           >
-                            <X className="w-3.5 h-3.5" />
+                            KICK
                           </button>
-
                           <button
-                            onClick={() => banMember(member.id, nickname)}
-                            className="p-1 rounded hover:bg-stone-850 hover:text-red-500 transition text-stone-550 cursor-pointer"
-                            title="Ban member permanently"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              banMember(member.id, nickname);
+                            }}
+                            className="flex-1 bg-stone-800 hover:bg-red-950/20 text-stone-300 hover:text-red-500 text-[8px] font-bold px-1 py-0.5 rounded"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            BAN
                           </button>
                         </div>
                       )}
@@ -1743,66 +1895,66 @@ export default function RoomPage() {
               })}
             </AnimatePresence>
           </div>
-        </div>
-
-        {/* 4. LIVE TEXT CHAT PANEL */}
-        <div id="live-chat-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-5 space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-stone-850/60">
+              {/* 4. LIVE TEXT CHAT PANEL */}
+        <div id="live-chat-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-4 space-y-3 flex flex-col min-h-[224px]">
+          <div className="flex items-center justify-between pb-1.5 border-b border-stone-850/60 shrink-0">
             <div className="flex items-center space-x-2">
               <MessageSquare className="w-4 h-4 text-amber-500" />
-              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Live Chat Room</span>
+              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Live Chat</span>
             </div>
-            
-            {/* Unread Pill indicator */}
             {unreadCount > 0 && (
               <button
                 onClick={() => {
                   setUnreadCount(0);
                   chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
                 }}
-                className="text-[9px] bg-amber-500 text-stone-950 font-bold px-2.5 py-0.5 rounded-full animate-bounce transition cursor-pointer hover:bg-amber-400"
+                className="text-[9px] bg-amber-500 text-stone-950 font-extrabold px-2 py-0.5 rounded-full animate-bounce"
               >
-                {unreadCount} UNREAD MESSAGES
+                {unreadCount} NEW
               </button>
             )}
           </div>
 
-          {/* Typing active notification */}
+          {/* typing status */}
           {typingUsers.length > 0 && (
-            <div className="text-[10px] font-mono text-amber-500/90 animate-pulse flex items-center gap-1.5 py-0.5">
-              <span className="h-1.5 w-1.5 bg-amber-500 rounded-full animate-ping"></span>
+            <div className="text-[9px] font-mono text-amber-500/95 animate-pulse flex items-center gap-1 shrink-0 bg-amber-500/[0.02] px-1.5 py-0.5 rounded-md">
+              <span className="h-1 w-1 bg-amber-500 rounded-full animate-ping"></span>
               <span>{typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...</span>
             </div>
           )}
 
-          {/* messages container */}
-          <div id="messages-list" className="h-56 overflow-y-auto p-4 space-y-3.5 bg-stone-950/40 rounded-xl border border-stone-850/80 scrollbar-thin">
+          {/* messages list - Discord-like look */}
+          <div id="messages-list" className="flex-1 overflow-y-auto p-2 space-y-2 bg-stone-950/40 rounded-xl border border-stone-850/60 scrollbar-thin max-h-48 min-h-[110px]">
             {messages.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center space-y-1">
-                <p className="text-xs text-stone-500 font-mono italic">No messages sent yet inside this space.</p>
-                <p className="text-[10px] text-stone-605 font-sans leading-normal">Start the conversation by sending a text below!</p>
+              <div className="h-full flex flex-col items-center justify-center text-center p-3">
+                <MessageSquare className="w-5 h-5 text-stone-700 mb-1 shrink-0" />
+                <p className="text-xs text-stone-500 font-medium italic">No messages yet.</p>
               </div>
             ) : (
               messages.map((msg) => {
-                const isMyMessage = msg.sender_id === currentMember?.user_id || msg.sender_id === currentMember?.guest_id;
-                
-                return (
-                  <div key={msg.id} className={`flex flex-col ${isMyMessage ? 'items-end' : 'items-start'}`}>
-                    <div className="flex items-center space-x-1.5 mb-1 max-w-full select-none">
-                      <span className="text-[10px] font-bold text-stone-400 truncate max-w-[120px]">
-                        {msg.sender_name}
-                      </span>
-                      <span className="text-[8px] font-mono text-stone-600">
-                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
+                const matchedMember = members.find(m => m.user_id === msg.sender_id || m.guest_id === msg.sender_id);
+                const nickname = msg.sender_name || 'Guest';
+                const avatar = matchedMember?.profiles?.avatar_url || `https://picsum.photos/seed/${encodeURIComponent(nickname)}/100`;
 
-                    <div className={`text-xs px-3.5 py-2.5 rounded-2xl leading-relaxed max-w-[85%] break-words shadow-sm ${
-                      isMyMessage 
-                        ? 'bg-amber-500 text-stone-950 font-bold rounded-tr-none' 
-                        : 'bg-stone-900 text-stone-100 rounded-tl-none border border-stone-850'
-                    }`}>
-                      {msg.content}
+                return (
+                  <div key={msg.id} className="flex items-start gap-2 py-0.5 text-xs hover:bg-stone-900/40 px-2 rounded transition-colors duration-150">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img 
+                      src={avatar} 
+                      alt={nickname} 
+                      className="w-7 h-7 rounded-md object-cover border border-stone-850 mt-0.5 shrink-0" 
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="font-extrabold text-stone-200 text-[11px] truncate">{nickname}</span>
+                        {matchedMember?.user_id === room.host_id && (
+                          <span className="text-[7px] bg-rose-500/10 border border-rose-500/20 text-rose-400 font-mono font-extrabold px-1 py-px rounded uppercase scale-90 shrink-0">HOST</span>
+                        )}
+                        <span className="text-[8px] font-mono text-stone-500">
+                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <p className="text-stone-300 select-text leading-relaxed whitespace-pre-wrap mt-0.5 break-words text-[11px]">{msg.content}</p>
                     </div>
                   </div>
                 );
@@ -1811,12 +1963,12 @@ export default function RoomPage() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* Input engine */}
-          <div>
+          {/* Send block */}
+          <div className="shrink-0">
             {currentMember?.is_muted ? (
-              <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-3 text-[10.5px] text-rose-450 leading-relaxed flex items-start gap-2 select-none">
-                <MicOff className="w-4 h-4 text-rose-450 mt-0.5 shrink-0" />
-                <span>Muted. Your message sending authorization has been suspended by the room host.</span>
+              <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-2 text-[10px] text-rose-450 leading-snug flex items-center gap-1.5 select-none">
+                <MicOff className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <span>Muted by the room host.</span>
               </div>
             ) : (
               <form 
@@ -1824,137 +1976,106 @@ export default function RoomPage() {
                   handleSendMessage(e);
                   setUnreadCount(0);
                 }} 
-                className="flex gap-2"
+                className="flex gap-1.5 animate-fade-in"
               >
                 <input
                   type="text"
                   maxLength={160}
-                  placeholder="Ask a question or request a song..."
+                  placeholder="Type a message..."
                   value={typedMessage}
                   onChange={(e) => {
                     setTypedMessage(e.target.value);
                     handleTypingKeydown();
                   }}
-                  className="flex-1 bg-stone-950 border border-stone-850 text-xs px-4 py-2.5 rounded-xl text-stone-200 placeholder-stone-650 focus:outline-none focus:ring-1 focus:ring-amber-500 transition focus:border-amber-500"
+                  className="flex-1 bg-stone-950 border border-stone-850 text-xs px-3 py-1.5 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition focus:border-amber-500"
                 />
                 <button
                   type="submit"
                   disabled={!typedMessage.trim()}
-                  className="p-3 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-xl transition cursor-pointer disabled:bg-stone-900 disabled:text-stone-700 shrink-0 select-none flex items-center justify-center active:scale-95 shadow-md"
+                  className="p-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-lg transition cursor-pointer disabled:bg-stone-900 disabled:text-stone-700 shrink-0 select-none flex items-center justify-center active:scale-95"
                 >
-                  <Send className="w-4 h-4 text-stone-950 fill-stone-950" />
+                  <Send className="w-3.5 h-3.5 text-stone-950 fill-stone-950" />
                 </button>
               </form>
             )}
           </div>
-        </div>
+        </div>    </div>
 
         {/* 5. MEDIA QUEUE CARD */}
-        <div id="media-queue-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-5 space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-stone-850/60">
+        <div id="media-queue-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-4 space-y-3 flex flex-col">
+          <div className="flex items-center justify-between pb-1.5 border-b border-stone-850/60 font-sans">
             <div className="flex items-center space-x-2">
-              <ListMusic className="w-4 h-4 text-amber-500" />
-              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Lounge Queue playlist ({queue.length})</span>
+              <ListMusic className="w-4 h-4 text-amber-500 animate-pulse" />
+              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Queue Playlist ({queue.length})</span>
             </div>
-            <span className="text-[10px] font-mono text-stone-500 uppercase">Interactive Scheduler</span>
+            <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wide">Sync Timeline</span>
           </div>
 
-          {/* Add Queue Item Form - Host rights or restricted info block */}
-          {currentIsHost ? (
-            <div className="p-4 bg-stone-950/60 rounded-xl border border-stone-850 space-y-2.5">
-              <span className="text-[9px] font-mono font-extrabold uppercase text-amber-500 tracking-wider">Host: Append Scheduled Stream</span>
-              <form onSubmit={handleAddMediaToQueue} className="space-y-2">
-                <input
-                  type="text"
-                  required
-                  placeholder="Paste direct audio/video streaming path or YouTube URL..."
-                  value={queueUrlInput}
-                  onChange={(e) => setQueueUrlInput(e.target.value)}
-                  className="w-full bg-stone-900 border border-stone-800 text-xs px-3.5 py-2.5 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
-                />
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Enter Optional Track Custom Title..."
-                    value={queueTitleInput}
-                    onChange={(e) => setQueueTitleInput(e.target.value)}
-                    className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3.5 py-2.5 rounded-lg text-stone-200 placeholder-stone-605 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
-                  />
-                  <button
-                    type="submit"
-                    className="bg-amber-500 hover:bg-amber-600 text-stone-950 text-xs font-extrabold px-4 rounded-lg transition whitespace-nowrap cursor-pointer hover:shadow-lg hover:shadow-amber-500/5 active:scale-95"
-                  >
-                    ADD TO PLAYLIST
-                  </button>
-                </div>
-              </form>
-            </div>
-          ) : (
-            <div className="p-3.5 bg-stone-900 border border-stone-850 rounded-xl text-[10px] text-stone-450 text-center font-sans">
-              Playlist Queue is read-only. Ask the Space Host to append additional tracks to the synchronization timeline.
-            </div>
-          )}
-
           {/* Stack of media queue items */}
-          <div className="space-y-2">
+          <div className="space-y-1.5 overflow-y-auto max-h-56 pr-1 scrollbar-thin">
             {queue.length === 0 ? (
-              <div className="py-8 bg-stone-950/30 rounded-xl border border-stone-850/40 text-center space-y-1">
-                <p className="text-xs text-stone-500 font-mono italic">No media added yet.</p>
-                <p className="text-[10px] text-stone-600 font-sans leading-normal">
-                  {currentIsHost ? 'Use the scheduler loaded block above to queue up streams.' : 'Waiting on the lounge host to configure and queue up music.'}
-                </p>
+              <div className="py-6 bg-stone-950/30 rounded-xl border border-stone-850/40 text-center space-y-1.5 flex flex-col items-center justify-center">
+                <ListMusic className="w-5 h-5 text-stone-700" />
+                <div>
+                  <p className="text-xs text-stone-500 font-medium italic">Playback queue is empty.</p>
+                  <p className="text-[9px] text-stone-450 max-w-[190px] mx-auto mt-0.5 font-sans leading-normal">
+                    {currentIsHost 
+                      ? 'Configure and schedule streams inside Host Tools control console.' 
+                      : 'Lounge host configures the synchronization timeline.'}
+                  </p>
+                </div>
               </div>
             ) : (
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {queue.map((item, idx) => (
                   <div 
                     key={item.id}
-                    className="flex items-center justify-between p-3.5 bg-stone-950/40 rounded-xl border border-stone-850 gap-3 hover:border-stone-800 transition"
+                    className={`flex items-center justify-between p-2 rounded-xl border gap-2.5 hover:bg-stone-900/10 transition duration-150 ${idx === 0 ? 'bg-amber-500/5 border-amber-500/15' : 'bg-stone-950/40 border-stone-850'}`}
                   >
-                    <div className="flex items-center space-x-3.5 min-w-0">
+                    <div className="flex items-center space-x-2.5 min-w-0">
                       {/* Thumbnail wrapper */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img 
-                        src={item.thumbnail_url || `https://picsum.photos/seed/${encodeURIComponent(item.title || '')}/120/90`} 
+                        src={item.thumbnail_url || `https://picsum.photos/seed/${encodeURIComponent(item.title || '')}/80/60`} 
                         alt={item.title || 'Queue Track'} 
-                        className="w-12 h-9 rounded object-cover border border-stone-800 shrink-0 select-none"
+                        className="w-10 h-7 rounded object-cover border border-stone-800 shrink-0 select-none bg-stone-950"
                       />
                       
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] font-mono text-amber-500 uppercase font-bold shrink-0">#{idx + 1}</span>
+                          <span className="text-[9px] font-mono text-amber-500 font-extrabold shrink-0">#{idx + 1}</span>
                           <span className="text-xs font-bold text-stone-200 truncate block leading-tight">
                             {item.title || 'Untitled Stream track'}
                           </span>
                         </div>
                         
-                        <div className="flex items-center gap-2 mt-1 font-mono text-[9px] text-stone-500">
-                          <span className="uppercase text-[8px] bg-stone-900 px-1.5 py-0.5 rounded border border-stone-850 text-stone-400 font-bold tracking-wider shrink-0">
-                            {item.media_type}
+                        <div className="flex items-center gap-1.5 mt-0.5 font-mono text-[8px] text-stone-500">
+                          <span className="uppercase text-[7px] bg-stone-900 px-1 rounded border border-stone-850 text-stone-400 font-bold shrink-0">
+                            {item.media_type === 'youtube' ? 'YT' : item.media_type}
                           </span>
                           <span>•</span>
                           <span>{formatTime(item.duration)}</span>
                           <span>•</span>
-                          <span>added by {item.added_by_name || 'Lounge Host'}</span>
+                          <span className="truncate max-w-[80px]">by {item.added_by_name || 'Lounge Host'}</span>
                         </div>
                       </div>
                     </div>
 
-                    {/* Left item actions for Host */}
+                    {/* Actions for Host */}
                     {currentIsHost && (
-                      <div className="flex items-center bg-stone-900 border border-stone-850 p-1 rounded-lg gap-0.5 shadow-sm shrink-0">
+                      <div className="flex items-center bg-stone-950 border border-stone-850 p-0.5 rounded-lg gap-0.5 shrink-0">
                         <button
                           onClick={() => handlePlayNextInQueue(item)}
-                          className="p-1 rounded text-stone-500 hover:text-amber-400 hover:bg-stone-850 cursor-pointer"
-                          title="Play Next (Promote to position 0)"
+                          className="p-1 rounded text-stone-500 hover:text-amber-400 hover:bg-stone-900 transition cursor-pointer"
+                          title="Promote Track to Play Next"
                         >
                           <ArrowUp className="w-3.5 h-3.5" />
                         </button>
                         
                         <button
                           onClick={() => handleRemoveFromQueue(item.id, item.title || 'Track')}
-                          className="p-1 rounded text-stone-500 hover:text-rose-500 hover:bg-stone-850 cursor-pointer"
-                          title="Delete from list"
+                          className="p-1 rounded text-stone-500 hover:text-rose-500 hover:bg-stone-900 transition cursor-pointer"
+                          title="Remove Track"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -1966,6 +2087,9 @@ export default function RoomPage() {
             )}
           </div>
         </div>
+
+      </div> {/* END OF RIGHT SIDEBAR */}
+    </div> {/* END OF GRID SPLIT CONTAINER */}
 
       </div>
 
