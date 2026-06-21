@@ -87,12 +87,11 @@ export async function getOrCreateProfile(
           window.dispatchEvent(new CustomEvent('supabase-schema-error', { detail: insertError.message }));
         }
       }
-      // Fallback object to keep client execution alive
-      return {
-        ...insertPayload,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      throw new Error(`Failed to initialize database profile row: ${insertError.message}. Please sign out and sign in again.`);
+    }
+
+    if (!createdProfile) {
+      throw new Error('Failed to register user profile. No database row returned.');
     }
 
     const finalProfile = createdProfile as unknown as Profile;

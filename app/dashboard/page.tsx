@@ -2,34 +2,37 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '@/components/AuthProvider';
 import { updateProfile, getOrCreateProfile } from '@/lib/profile';
-import { writeLog, getLogs, clearLogs, LogEntry } from '@/lib/logger';
+import { writeLog } from '@/lib/logger';
 import { getSupabase } from '@/lib/supabase';
 import { generateRoomCode } from '@/lib/room';
+import Logo from '@/components/Logo';
 import { 
   LogOut, 
   User, 
-  Terminal, 
-  Check, 
   Edit3, 
-  RefreshCw, 
-  Play, 
-  Database, 
-  ShieldAlert, 
-  Activity, 
-  Cpu, 
+  Plus, 
+  ArrowRight, 
+  Search, 
+  Users, 
+  Radio, 
+  Loader2, 
+  X,
+  Share2,
+  Sparkles,
+  Music,
+  Headphones,
+  Flame,
+  MessageSquare,
+  Bell,
+  Link2,
+  ArrowUpRight,
+  ShieldAlert,
   CheckCircle,
-  HelpCircle,
-  Plus,
-  ArrowRight,
-  Search,
-  Users,
-  Radio,
-  Tv,
-  ListCollapse,
-  Loader2,
-  X
+  Database,
+  Crown
 } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
@@ -40,17 +43,16 @@ export default function DashboardPage() {
   
   const [displayName, setDisplayName] = React.useState('');
   const [updating, setUpdating] = React.useState(false);
+  const [showEditProfile, setShowEditProfile] = React.useState(false);
   const [successNotice, setSuccessNotice] = React.useState<string | null>(null);
   const [errorNotice, setErrorNotice] = React.useState<string | null>(null);
   
-  const [logs, setLogs] = React.useState<LogEntry[]>([]);
-  const [testing, setTesting] = React.useState(false);
-  const [testResult, setTestResult] = React.useState<{ [key: string]: 'passed' | 'failed' | null }>({});
-
   // Room management states
   const [roomsJoined, setRoomsJoined] = React.useState<any[]>([]);
   const [roomsCount, setRoomsCount] = React.useState<{ [key: string]: number }>({});
   const [loadingRooms, setLoadingRooms] = React.useState(true);
+  
+  // Actions
   const [joinCodeInput, setJoinCodeInput] = React.useState('');
   const [joinError, setJoinError] = React.useState<string | null>(null);
   const [joining, setJoining] = React.useState(false);
@@ -61,6 +63,12 @@ export default function DashboardPage() {
   const [createIsPrivate, setCreateIsPrivate] = React.useState(false);
   const [creatingRoom, setCreatingRoom] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
+
+  // General Notification Banner
+  const [showNotification, setShowNotification] = React.useState(true);
+
+  // Copy States for Room Invites
+  const [copiedCode, setCopiedCode] = React.useState<string | null>(null);
 
   const supabaseConnected = React.useMemo(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -206,7 +214,7 @@ export default function DashboardPage() {
         .single();
 
       if (inviteError || !newMember) {
-        throw new Error(inviteError?.message || 'Lounge host membership registration failed in the database.');
+        throw new Error(inviteError?.message || 'Lounge host membership registration failed.');
       }
 
       writeLog('success', 'Lounge synced', `Interactive studio room "${createName}" parsed successfully under code ${activeCode}!`);
@@ -215,12 +223,10 @@ export default function DashboardPage() {
       setCreateName('');
       setCreateDesc('');
       
-      // Redirect to the newly created room!
       router.push(`/room/${activeCode}`);
     } catch (err: any) {
       console.error('Room creation failure:', err.message);
       setCreateError(err.message);
-      writeLog('error', 'Lounge synced', `Room creation aborted layout constraint checks: ${err.message}`);
     } finally {
       setCreatingRoom(false);
     }
@@ -234,8 +240,6 @@ export default function DashboardPage() {
     setJoinError(null);
     
     const targetCode = joinCodeInput.trim().toUpperCase();
-    writeLog('warn', 'Lounge synced', `Performing layout constraints checks for room joining index: ${targetCode}`);
-
     const supabase = getSupabase();
     if (!supabase) {
       setJoining(false);
@@ -243,7 +247,6 @@ export default function DashboardPage() {
     }
 
     try {
-      // Check if room exists
       const { data: roomMatch, error: selectError } = await supabase
         .from('rooms')
         .select('*')
@@ -253,13 +256,11 @@ export default function DashboardPage() {
       if (selectError) throw selectError;
 
       if (!roomMatch) {
-         setJoinError('Space code does not exist. Please check spellings and retry.');
-         writeLog('error', 'Lounge synced', `Room candidate resolving failed: code "${targetCode}" is inactive or missing.`);
+         setJoinError('Room code does not exist. Check spelling and retry.');
          setJoining(false);
          return;
       }
 
-      // Check if user is banned from this room in the room_members table
       const { data: bannedCheck } = await supabase
         .from('room_members')
         .select('*')
@@ -268,49 +269,18 @@ export default function DashboardPage() {
         .maybeSingle();
 
       if ((bannedCheck as any)?.is_banned) {
-        setJoinError('You are banned from entering this lounge/room session.');
-        writeLog('error', 'Security block', `Access to "${(roomMatch as any).name}" blocked matching user ban index.`);
+        setJoinError('You are banned from entering this room.');
         setJoining(false);
         return;
       }
 
-      // Success, router redirect to room page
-      writeLog('success', 'Lounge synced', `Valid room index resolved. Navigating user to lounge "${(roomMatch as any).name}"...`);
       router.push(`/room/${targetCode}`);
     } catch (err: any) {
       setJoinError(err.message);
-      writeLog('error', 'Lounge synced', `Join pipeline failure: ${err.message}`);
     } finally {
       setJoining(false);
     }
   };
-
-  // Sync state variables once profile is successfully loaded
-  React.useEffect(() => {
-    if (profile) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setDisplayName(profile.display_name || '');
-    }
-  }, [profile]);
-
-  // Load Rooms on mount/user load
-  React.useEffect(() => {
-    if (user && supabaseConnected) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchRooms();
-    }
-  }, [user, fetchRooms, supabaseConnected]);
-
-  // Reactive listener to capture stream logs in our dev terminal
-  React.useEffect(() => {
-    const handleLogsSync = () => {
-      setLogs(getLogs());
-    };
-    
-    handleLogsSync();
-    window.addEventListener('syncwave-new-log', handleLogsSync);
-    return () => window.removeEventListener('syncwave-new-log', handleLogsSync);
-  }, []);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -320,310 +290,265 @@ export default function DashboardPage() {
     setSuccessNotice(null);
     setErrorNotice(null);
 
-    writeLog('info', 'Profile created', `Initiating profile edit write for display_name: "${displayName}"`);
-
     try {
       await updateProfile(user.id, { display_name: displayName.trim() });
       await refreshProfile();
-      writeLog('success', 'Profile created', `Successfully updated profile display name signature to: ${displayName}`);
-      setSuccessNotice('Your SyncWave profile metadata was written successfully!');
-      setTimeout(() => setSuccessNotice(null), 4000);
+      setSuccessNotice('Your SyncWave profile was updated successfully!');
+      setTimeout(() => {
+        setSuccessNotice(null);
+        setShowEditProfile(false);
+      }, 2500);
     } catch (err: any) {
-      const msg = err.message || 'database rejected profile attributes update.';
-      writeLog('error', 'Profile recovery', `Profile update aborted layout constraint checks: ${msg}`);
-      setErrorNotice(msg);
+      setErrorNotice(err.message || 'Database rejected profile update.');
     } finally {
       setUpdating(false);
     }
   };
 
-  // Profile auto-recovery simulation test
-  const triggerDemoProfileRecoveryCheck = async () => {
-    if (!user || !profile) return;
-    
-    writeLog('warn', 'Profile recovery', 'Simulating immediate profile recovery trigger test...');
-    const supabase = getSupabase();
-    if (!supabase) return;
-
-    try {
-      // 1. Temporarily clear local profiles row in database
-      const { error: deletionError } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', user.id);
-
-      if (deletionError) {
-        throw new Error(`Profile table clearance warning: ${deletionError.message}`);
-      }
-
-      writeLog('info', 'Profile recovery', 'Database entry cleared temporarily for tester. Retrying recovery handshake...');
-
-      // 2. Fetch/trigger getOrCreateProfile immediately which handles missing entries
-      const recoveredProfile = await getOrCreateProfile(user.id, user.email || '');
-      await refreshProfile();
-      
-      writeLog('success', 'Profile recovery', `Handshake verified successfully. Reconstituted profile username: "@${recoveredProfile.username}"`);
-      setSuccessNotice('Auto-recovery test completed! Row was deleted in Postgres & recreated instantly.');
-      setTimeout(() => setSuccessNotice(null), 4000);
-    } catch (err: any) {
-      writeLog('error', 'Profile recovery', `Test loop failure: ${err.message}`);
-      setErrorNotice(err.message);
-    }
+  const copyRoomInvite = (code: string) => {
+    const inviteUrl = `${window.location.origin}/room/${code}`;
+    navigator.clipboard.writeText(inviteUrl);
+    setCopiedCode(code);
+    setTimeout(() => setCopiedCode(null), 2500);
   };
 
-  // Full System Integration verification suite
-  const runSelfVerificationTests = async () => {
-    setTesting(true);
-    writeLog('info', 'Session refresh', 'Starting automated verification self-diagnostics checklist...');
-
-    const items = [
-      'new_signup',
-      'email_verification',
-      'login_auth',
-      'session_persistence',
-      'profile_auto_recovery',
-      'runtime_verification'
-    ];
-
-    for (const key of items) {
-      setTestResult(prev => ({ ...prev, [key]: null }));
+  React.useEffect(() => {
+    if (profile) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDisplayName(profile.display_name || '');
     }
+  }, [profile]);
 
-    const runStep = (key: string, ms: number) => {
-      return new Promise<void>((resolve) => {
-        setTimeout(() => {
-          setTestResult(prev => ({ ...prev, [key]: 'passed' }));
-          resolve();
-        }, ms);
-      });
-    };
-
-    try {
-      writeLog('info', 'Session refresh', 'Verify Test A: Checking signup schema state triggers...');
-      await runStep('new_signup', 600);
-      
-      writeLog('info', 'Session refresh', 'Verify Test B: Confirming validation filters token loops...');
-      await runStep('email_verification', 500);
-
-      writeLog('info', 'Session refresh', 'Verify Test C: Authenticating connection buffers with database keys...');
-      await runStep('login_auth', 500);
-
-      writeLog('info', 'Session refresh', 'Verify Test D: Syncing session storage token states...');
-      await runStep('session_persistence', 600);
-
-      writeLog('info', 'Session refresh', 'Verify Test E: Checking profile table checks and recovery triggers...');
-      await runStep('profile_auto_recovery', 700);
-
-      writeLog('info', 'Session refresh', 'Verify Test F: Inspecting TypeScript and Node layout checks...');
-      await runStep('runtime_verification', 400);
-
-      writeLog('success', 'Session restored', 'All verification metrics passed. SyncWave Phase 1 core modules are functional!');
-      setSuccessNotice('Diagnostics check complete! Verified real integrations.');
-      setTimeout(() => setSuccessNotice(null), 4000);
-    } catch (e) {
-      writeLog('error', 'Login failure', 'Sanity analysis identified edge warning in pipeline.');
-    } finally {
-      setTesting(false);
+  React.useEffect(() => {
+    if (user && supabaseConnected) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchRooms();
     }
-  };
+  }, [user, fetchRooms, supabaseConnected]);
+
+  // Curated Mock Trending items
+  const trendingPublicRooms = [
+    { name: "Coffee & Lofi Oasis ☕", host: "@clara", listeners: 48, genre: "Lofi Beats", code: "LOFI03" },
+    { name: "Midnight Techno Underground ⚡", host: "dj_neon", listeners: 142, genre: "Dark Techno", code: "TECH99" },
+    { name: "Anime OST Chill Vibes 🎧", host: "otaku_wave", listeners: 89, genre: "J-Pop / Chill", code: "ANIME4" }
+  ];
+
+  const popularSongs = [
+    { title: "Glimpse of Us", artist: "Joji", duration: "3:53", playCount: "124K streams" },
+    { title: "Starboy", artist: "The Weeknd", duration: "3:50", playCount: "98K streams" },
+    { title: "Cruel Summer", artist: "Taylor Swift", duration: "2:58", playCount: "82K streams" }
+  ];
+
+  const virtualFriends = [
+    { name: "Alex Chen", handle: "@alex_wave", avatar: "https://picsum.photos/seed/alex/150/150", status: "listening to Lofi Oasis", online: true },
+    { name: "Jessica Fox", handle: "@jess_fox", avatar: "https://picsum.photos/seed/jessica/150/150", status: "hosting Techno Underground", online: true },
+    { name: "Liam Stone", handle: "@liam_s", avatar: "https://picsum.photos/seed/liam/150/150", status: "AFK • Vibe Checking", online: true },
+    { name: "Mia Wong", handle: "@mia_lofi", avatar: "https://picsum.photos/seed/mia/150/150", status: "offline", online: false }
+  ];
+
+  const recentMediaActivities = [
+    { user: "@alex_wave", action: "queued", item: "Starboy - The Weeknd", time: "2 min ago" },
+    { user: "dj_neon", action: "synchronized", item: "Techno Rave Session Vol 5", time: "12 min ago" },
+    { user: "system", action: "updated playlist", item: "Summer Sunset Mix", time: "1 hr ago" }
+  ];
 
   return (
-    <div id="dashboard-viewport" className="min-h-screen bg-stone-50 select-none flex flex-col">
+    <div id="dashboard-ambient-container" className="min-h-screen bg-stone-950 text-stone-100 select-none flex flex-col relative overflow-x-hidden font-sans">
       
-      {/* Dynamic Header */}
-      <nav id="dashboard-nav" className="bg-white border-b border-stone-200/80 sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className="bg-stone-900 border border-stone-850 p-1.5 rounded-lg text-stone-50">
-            <Activity className="w-4 h-4 text-amber-400" />
-          </div>
-          <div>
-            <span className="font-semibold text-sm tracking-tight text-stone-900">SyncWave Panel</span>
-            <span className="text-[10px] font-mono text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full ml-2 uppercase font-medium">Foundation Live</span>
+      {/* Glow Backdrops */}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(168,85,247,0.08),transparent_55%),radial-gradient(circle_at_bottom_left,rgba(6,182,212,0.06),transparent_50%)] pointer-events-none" />
+
+      {/* Aesthetic Header */}
+      <nav id="dashboard-navbar" className="bg-stone-900/60 border-b border-stone-850 backdrop-blur-xl sticky top-0 z-50 px-4 sm:px-8 py-4 flex items-center justify-between">
+        <div className="flex items-center space-x-6">
+          <Logo className="hover:scale-[1.01] transition-all" />
+          
+          <div className="hidden md:flex items-center space-x-2 text-[10px] sm:text-xs">
+            <span className="h-2 w-2 rounded-full bg-cyan-400 animate-ping"></span>
+            <span className="font-semibold text-cyan-400 uppercase tracking-wider">Sync Active</span>
           </div>
         </div>
 
         <div className="flex items-center space-x-4">
-          <span className="text-xs font-mono text-stone-500 hidden md:inline-block">Logged in: {user?.email}</span>
+          {/* Subtle link to administration console */}
+          <button 
+            onClick={() => router.push('/admin')}
+            className="hidden sm:flex items-center space-x-1.5 text-xs text-stone-400 hover:text-stone-200 transition bg-stone-800/45 px-2.5 py-1.5 rounded-lg border border-stone-800"
+          >
+            <Database className="w-3.5 h-3.5 text-purple-400" />
+            <span className="font-mono text-[9px] tracking-widest font-bold">CONSOLE</span>
+          </button>
+
           <button
             onClick={signOut}
-            className="flex items-center space-x-1 px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-semibold uppercase tracking-wider rounded-lg border border-stone-200 cursor-pointer transition active:scale-95"
+            className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-900 hover:bg-stone-850 hover:text-white border border-stone-800 text-stone-300 text-xs font-semibold tracking-wider rounded-lg transition-all active:scale-95 cursor-pointer"
           >
-            <LogOut className="w-3.5 h-3.5 text-stone-500" />
-            <span>Sign Out</span>
+            <LogOut className="w-3.5 h-3.5 text-stone-450" />
+            <span>EXITS</span>
           </button>
         </div>
       </nav>
 
-      {/* Main Workspace Frame */}
-      <main id="dashboard-main" className="flex-1 max-w-6xl w-full mx-auto px-4 md:px-8 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+      {/* Main Social Board Panel */}
+      <main id="main-panel-core" className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-8 py-6 flex flex-col space-y-6">
         
-        {/* Profile Attributes Deck (4 cols on wide) */}
-        <div id="profile-deck" className="lg:col-span-5 flex flex-col space-y-6">
+        {/* Banner Announcement */}
+        {showNotification && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-gradient-to-r from-purple-900/20 via-indigo-900/10 to-cyan-900/20 border border-purple-500/15 rounded-2xl p-4 flex items-center justify-between relative overflow-hidden shrink-0 shadow-lg"
+          >
+            <div className="absolute top-0 right-0 h-24 w-24 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
+            <div className="flex items-center space-x-3 text-xs leading-relaxed z-10 pr-4">
+              <Sparkles className="w-5 h-5 text-purple-400 shrink-0 animate-bounce" />
+              <div>
+                <span className="font-bold text-white block">Welcome back to SyncWave Social!</span>
+                <span className="text-stone-300">Invite followers, queue YouTube visualizer streams, and synchronize sound loops in real time!</span>
+              </div>
+            </div>
+            <button 
+              onClick={() => setShowNotification(false)}
+              className="text-stone-400 hover:text-white transition z-10"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+
+        {/* Dashboard Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           
-          {/* User profile details Card */}
-          <div className="bg-white border border-stone-200/85 rounded-2xl p-6 shadow-xl shadow-stone-100 flex flex-col space-y-6">
+          {/* COLUMN LEFT (8 cols): Primary Social Dash */}
+          <div className="lg:col-span-8 flex flex-col space-y-6">
             
-            <div className="flex items-center space-x-4">
-              {profile?.avatar_url ? (
-                <img 
-                  src={profile.avatar_url} 
-                  alt={profile.username} 
-                  className="w-14 h-14 rounded-2xl border-2 border-stone-900 object-cover bg-stone-150 shrink-0" 
-                />
-              ) : (
-                <div className="w-14 h-14 rounded-2xl border border-stone-200 bg-stone-100 flex items-center justify-center shrink-0">
-                  <User className="w-6 h-6 text-stone-400" />
+            {/* COMPACT PROFILE CARD & ACTIONS COMBINED */}
+            <div className="bg-stone-900/40 border border-stone-850/80 rounded-2xl p-6 shadow-xl backdrop-blur-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6 relative overflow-hidden">
+              
+              {/* Profile card left */}
+              <div className="flex items-center space-x-4">
+                <div className="relative group cursor-pointer" onClick={() => setShowEditProfile(true)}>
+                  <div className="absolute -inset-0.5 bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 rounded-2xl blur opacity-35 group-hover:opacity-60 transition duration-300"></div>
+                  {profile?.avatar_url ? (
+                    <img 
+                      src={profile.avatar_url} 
+                      alt={profile.username} 
+                      className="relative w-14 h-14 rounded-2xl border border-stone-800 object-cover bg-stone-900 shrink-0" 
+                    />
+                  ) : (
+                    <div className="relative w-14 h-14 rounded-2xl border border-stone-800 bg-stone-950 flex items-center justify-center shrink-0">
+                      <User className="w-6 h-6 text-stone-500" />
+                    </div>
+                  )}
+                  <div className="absolute -bottom-1 -right-1 bg-stone-950 border border-stone-800 p-1 rounded-lg">
+                    <Edit3 className="w-3 h-3 text-cyan-400" />
+                  </div>
                 </div>
-              )}
-              
-              <div>
-                <h2 className="text-md font-semibold text-stone-900 tracking-tight">{profile?.display_name || 'Wave User'}</h2>
-                <p className="text-xs font-mono text-amber-600 font-bold flex items-center">
-                  <span>@{profile?.username || 'user'}</span>
-                </p>
-                <p className="text-[10px] font-mono text-stone-450 mt-0.5">{profile?.email}</p>
+                
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="text-md font-bold text-white tracking-tight">{profile?.display_name || 'Wave User'}</h2>
+                    {profile?.username === 'operator' && <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                  </div>
+                  <p className="text-xs font-mono text-purple-400 font-bold">@{profile?.username || 'user'}</p>
+                  <p className="text-[10px] text-stone-400 font-mono mt-0.5">{profile?.email}</p>
+                </div>
               </div>
-            </div>
 
-            {/* Error alerts inside card */}
-            {errorNotice && (
-              <div className="bg-rose-50 border border-rose-150 text-rose-800 p-3 rounded-lg text-xs leading-relaxed flex items-start space-x-2">
-                <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <span>{errorNotice}</span>
-              </div>
-            )}
-
-            {successNotice && (
-              <div className="bg-emerald-50 border border-emerald-150 text-emerald-800 p-3 rounded-lg text-xs leading-relaxed flex items-start space-x-2">
-                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <span>{successNotice}</span>
-              </div>
-            )}
-
-            {/* Form editor */}
-            <form onSubmit={handleUpdateProfile} className="space-y-4 pt-2 border-t border-stone-100">
-              <h3 className="text-[10px] font-mono uppercase tracking-wider text-stone-400 font-bold block">Account Management</h3>
-              
-              <div>
-                <label className="text-[10px] font-mono text-stone-500 block uppercase mb-1">Proposed Display Name</label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-stone-450">
-                    <Edit3 className="w-3.5 h-3.5" />
+              {/* Stats highlights */}
+              <div className="grid grid-cols-4 gap-2 text-center bg-stone-950/40 border border-stone-850 p-3 rounded-xl sm:min-w-[320px]">
+                <div>
+                  <span className="text-[14px] font-bold text-white block">
+                    {roomsJoined.filter(r => r.isOwner).length}
                   </span>
-                  <input
-                    type="text"
-                    required
-                    disabled={updating}
-                    placeholder="Sai Dheeraj"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    className="w-full text-xs pl-8 pr-3 py-2 bg-stone-50 border border-stone-205 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-stone-900 transition text-stone-900"
-                  />
+                  <span className="text-[9px] text-stone-400 font-medium tracking-tight block">Hosted</span>
+                </div>
+                <div className="border-l border-stone-850/80">
+                  <span className="text-[14px] font-bold text-white block">
+                    {roomsJoined.length}
+                  </span>
+                  <span className="text-[9px] text-stone-400 font-medium tracking-tight block">Joined</span>
+                </div>
+                <div className="border-l border-stone-850/80">
+                  <span className="text-[14px] font-bold text-cyan-400 block">
+                    {virtualFriends.filter(f => f.online).length}
+                  </span>
+                  <span className="text-[9px] text-stone-400 font-medium tracking-tight block">Online</span>
+                </div>
+                <div className="border-l border-stone-850/80">
+                  <span className="text-[14px] font-bold text-purple-400 block">42h</span>
+                  <span className="text-[9px] text-stone-400 font-medium tracking-tight block">Synced</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 text-[11px]">
-                <div className="bg-stone-50 p-2 rounded-lg border border-stone-150">
-                  <span className="text-stone-400 font-mono block text-[9px] uppercase">Unique Suffix</span>
-                  <span className="text-stone-700 font-mono font-medium truncate shrink-0">@{profile?.username}</span>
-                </div>
-                <div className="bg-stone-50 p-2 rounded-lg border border-stone-150">
-                  <span className="text-stone-400 font-mono block text-[9px] uppercase">Creation Index</span>
-                  <span className="text-stone-700 font-mono font-medium truncate block">Auto-Managed</span>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={updating}
-                className="w-full bg-stone-900 text-stone-100 py-2 rounded-lg text-[10px] font-semibold tracking-wider uppercase hover:bg-stone-850 transition flex items-center justify-center space-x-1 cursor-pointer disabled:bg-stone-400"
-              >
-                {updating ? 'Saving Changes...' : 'Save Member Details'}
-              </button>
-            </form>
-
-            {/* Profile Auto-Recovery Live Trigger */}
-            <div className="pt-4 border-t border-stone-100 space-y-2">
-              <div className="flex justify-between items-center">
-                <h4 className="text-[10px] font-mono uppercase tracking-wider text-amber-700 font-bold">Auto-Recovery System</h4>
-                <span className="h-2 w-2 bg-emerald-500 rounded-full animate-ping"></span>
-              </div>
-              <p className="text-[11px] text-stone-500 leading-normal">
-                Test the robust **Profile Auto-Recovery** system. This deletes your profile database row and dynamically recreates and recovers it on the fly!
-              </p>
-              <button
-                onClick={triggerDemoProfileRecoveryCheck}
-                className="w-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-800 text-[10px] font-semibold tracking-wider uppercase py-2 rounded-lg border border-amber-500/20 cursor-pointer active:scale-98 transition flex items-center justify-center space-x-1"
-              >
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
-                <span>Simulate Profile Recovery</span>
-              </button>
             </div>
 
-          </div>
-
-        </div>
-
-        {/* Security Diagnostics Terminal & Tests (7 cols) */}
-        <div id="diagnostics-deck" className="lg:col-span-7 flex flex-col space-y-6">
-          
-          {/* ROOM INFRASTRUCTURE PANEL */}
-          <div className="bg-white border border-stone-200/85 rounded-2xl p-6 shadow-xl shadow-stone-100 flex flex-col space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-stone-150">
-              <div className="flex items-center space-x-2">
-                <Radio className="w-5 h-5 text-amber-500 animate-pulse" />
-                <div>
-                  <h3 className="text-sm font-bold text-stone-900 tracking-tight">SyncWave Media Lounges</h3>
-                  <p className="text-[10px] font-mono text-stone-450 uppercase">Room Infrastructure Center</p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="flex items-center justify-center space-x-1.5 px-3 py-1.5 bg-stone-900 hover:bg-stone-850 hover:shadow shadow-amber-500/5 text-stone-50 text-[10px] font-semibold uppercase tracking-wider rounded-lg cursor-pointer transition active:scale-95"
-              >
-                <Plus className="w-3.5 h-3.5 text-amber-400" />
-                <span>Create Lounge</span>
-              </button>
-            </div>
-
-            {/* Room Joiner Quick Form */}
+            {/* PRIMARY ACTIONS PANEL */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-stone-50 border border-stone-150 rounded-xl p-4 flex flex-col space-y-3 justify-between">
+              
+              {/* Box 1: CREATE ROOM (Addictive Visual) */}
+              <motion.div 
+                whileHover={{ scale: 1.01 }}
+                className="bg-gradient-to-br from-stone-900 to-stone-950 border border-stone-800 p-5 rounded-2xl shadow-xl relative overflow-hidden group justify-between flex flex-col space-y-4 min-h-[160px]"
+              >
+                {/* Visual gradient orb */}
+                <div className="absolute top-0 right-0 h-28 w-28 bg-gradient-to-br from-cyan-500/10 to-purple-500/10 rounded-full blur-xl pointer-events-none group-hover:scale-125 transition" />
+                
                 <div>
-                  <h4 className="text-xs font-bold text-stone-800 flex items-center gap-1">
-                    <Search className="w-3.5 h-3.5 text-amber-500" /> Join Existing Lounge
-                  </h4>
-                  <p className="text-[11px] text-stone-500 mt-1 leading-normal">
-                    Enter the USPTO-style 6-digit space key/code supplied by your host to join synchronized audio streams instantly.
+                  <div className="bg-cyan-500/10 border border-cyan-500/20 h-9 w-9 rounded-xl flex items-center justify-center text-cyan-400 text-sm">
+                    <Plus className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-sm font-bold text-white tracking-wide mt-3">Start Syncing Audio</h3>
+                  <p className="text-xs text-stone-400 leading-normal mt-1">
+                    Assemble a private or public music room, stream live visual tracks, and listen in sync.
                   </p>
                 </div>
 
-                <form onSubmit={handleJoinByCode} className="space-y-2">
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 hover:from-cyan-350 hover:to-purple-450 text-white font-bold py-2 px-4 rounded-xl text-xs tracking-wider uppercase transition shadow-md shadow-cyan-500/5 cursor-pointer flex items-center justify-center space-x-1.5"
+                >
+                  <span>Create New Lounge</span>
+                </button>
+              </motion.div>
+
+              {/* Box 2: JOIN ROOM BY CODE (Inline, interactive input) */}
+              <div className="bg-gradient-to-br from-stone-900 to-stone-950 border border-stone-800 p-5 rounded-2xl shadow-xl flex flex-col justify-between space-y-4 min-h-[160px]">
+                <div>
+                  <div className="bg-purple-500/10 border border-purple-500/20 h-9 w-9 rounded-xl flex items-center justify-center text-purple-400 text-sm">
+                    <Search className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-sm font-bold text-white tracking-wide mt-3">Enter Room Code</h3>
+                  <p className="text-xs text-stone-400 leading-normal mt-1">
+                    Enter the secret 6-digit lounge code supplied by a friend to connect instantly.
+                  </p>
+                </div>
+
+                <form onSubmit={handleJoinByCode} className="space-y-1.5 relative">
                   <div className="relative">
                     <input
                       type="text"
                       required
-                      placeholder="e.g. XJ9K2L"
+                      placeholder="e.g. SLUG99"
                       maxLength={6}
                       value={joinCodeInput}
                       onChange={(e) => setJoinCodeInput(e.target.value)}
-                      className="w-full text-xs uppercase pl-3 pr-10 py-2.5 bg-white border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-550/10 focus:border-stone-900 transition text-stone-900 font-mono tracking-widest font-bold"
+                      className="w-full text-xs uppercase px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-purple-400 transition text-stone-100 font-mono tracking-widest font-bold pr-10"
                     />
                     <button
                       type="submit"
                       disabled={joining || !joinCodeInput.trim()}
-                      className="absolute right-1.5 top-1.5 p-1.5 bg-stone-900 hover:bg-stone-850 text-stone-50 rounded-md transition cursor-pointer disabled:bg-stone-300"
+                      className="absolute right-1.5 top-1.5 p-1.5 bg-purple-500 hover:bg-purple-600 text-white rounded-md transition cursor-pointer disabled:bg-stone-800"
                     >
                       {joining ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       ) : (
-                        <ArrowRight className="w-3.5 h-3.5 text-amber-400" />
+                        <ArrowRight className="w-3.5 h-3.5 text-white" />
                       )}
                     </button>
                   </div>
                   {joinError && (
-                    <p className="text-[10px] text-rose-600 font-medium leading-normal flex items-center gap-1">
+                    <p className="text-[10px] text-rose-450 font-bold leading-normal flex items-center gap-1 px-1">
                       <ShieldAlert className="w-3 h-3 shrink-0" />
                       <span>{joinError}</span>
                     </p>
@@ -631,186 +556,253 @@ export default function DashboardPage() {
                 </form>
               </div>
 
-              {/* Minimal instructional widget */}
-              <div className="bg-stone-50 border border-stone-150 rounded-xl p-4 flex flex-col justify-between space-y-2">
-                <div>
-                  <h4 className="text-xs font-bold text-stone-800 flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-amber-500" /> Frictionless Guest Mode
-                  </h4>
-                  <p className="text-[11px] text-stone-500 leading-normal mt-1">
-                    Support guest readers effortlessly. Unauthenticated users enter room codes directly to enter room sessions with temporary identities instantly.
-                  </p>
-                </div>
-                <div className="text-[10px] font-mono text-stone-450 uppercase flex justify-between pt-2 border-t border-stone-200">
-                  <span>Authentication: Optional</span>
-                  <span>Friction rate: 0%</span>
-                </div>
-              </div>
             </div>
 
-            {/* List of active rooms */}
-            <div className="space-y-3.5">
-              <h4 className="text-[10px] font-mono uppercase tracking-wider text-stone-450 font-bold block">
-                My Connected Spaces ({roomsJoined.length})
-              </h4>
+            {/* MY CHANNELS / ROOMS REGISTERED */}
+            <div className="bg-stone-900/30 border border-stone-850 p-6 rounded-2xl shadow-xl">
+              <div className="flex justify-between items-center pb-4 border-b border-stone-850 mb-4">
+                <div className="flex items-center space-x-2">
+                  <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">My Connected Rooms ({roomsJoined.length})</h3>
+                </div>
+                
+                <span className="text-[10px] font-mono text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full font-bold">
+                  Active Sync
+                </span>
+              </div>
 
               {loadingRooms ? (
-                <div className="py-8 text-center flex flex-col items-center justify-center space-y-2 text-stone-500 font-mono text-xs">
-                  <Loader2 className="w-6 h-6 text-amber-500 animate-spin" />
-                  <span>Loading spaces status...</span>
+                <div className="py-12 text-center flex flex-col items-center justify-center space-y-3 text-stone-400 font-mono text-xs">
+                  <Loader2 className="w-7 h-7 text-cyan-400 animate-spin" />
+                  <span>Calibrating signal...</span>
                 </div>
               ) : roomsJoined.length === 0 ? (
-                <div className="border border-dashed border-stone-200 rounded-xl py-8 px-4 text-center space-y-2">
-                  <p className="text-xs text-stone-450 font-mono italic">You do not belong to any active SyncWave spaces.</p>
+                <div className="border border-dashed border-stone-800 rounded-2xl py-12 px-6 text-center space-y-3">
+                  <span className="text-xs text-stone-400 font-mono block italic">You don&apos;t belong to any active SyncWave spaces yet.</span>
                   <button
                     onClick={() => setShowCreateModal(true)}
-                    className="text-xs text-amber-600 hover:text-amber-750 font-bold hover:underline inline-flex items-center gap-0.5 cursor-pointer"
+                    className="text-xs bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 font-bold border border-cyan-505/20 rounded-xl px-4 py-2 hover:underline inline-flex items-center gap-1 cursor-pointer transition active:scale-95"
                   >
-                    Create a new space now <Plus className="w-3 h-3" />
+                    Host your first live space now <Plus className="w-3 h-3" />
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {roomsJoined.map((r) => {
                     const count = roomsCount[r.id] || 1;
                     return (
                       <div
                         key={r.id}
-                        onClick={() => router.push(`/room/${r.slug}`)}
-                        className="p-3.5 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl transition cursor-pointer flex flex-col justify-between space-y-3 group"
+                        className="p-5 bg-stone-950 hover:bg-stone-900 border border-stone-850/60 rounded-2xl transition duration-250 flex flex-col justify-between space-y-4 group relative overflow-hidden"
                       >
-                        <div className="flex justify-between items-start gap-2">
+                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-cyan-500 to-purple-500 opacity-30 group-hover:opacity-100 transition duration-300" />
+                        
+                        <div className="flex justify-between items-start gap-3">
                           <div className="min-w-0">
-                            <h5 className="text-xs font-bold text-stone-800 truncate leading-tight group-hover:text-amber-600 transition">
+                            <h5 className="text-xs font-bold text-white truncate leading-tight group-hover:text-cyan-400 transition cursor-pointer" onClick={() => router.push(`/room/${r.slug}`)}>
                               {r.name}
                             </h5>
-                            <span className="text-[9px] font-mono text-amber-600 font-bold uppercase block mt-1">
-                              CODE: #{r.slug}
+                            <span className="text-[10px] font-mono text-cyan-400 font-bold block mt-1">
+                              #{r.slug}
                             </span>
                           </div>
                           
-                          <span className="text-[9px] font-mono font-bold uppercase tracking-wider border px-1.5 py-0.5 rounded-md shrink-0 bg-stone-50 text-stone-500">
-                            {r.isOwner ? 'Host' : 'Member'}
+                          <span className="text-[9px] font-mono font-bold uppercase tracking-wider border border-stone-800 px-1.5 py-0.5 rounded-md shrink-0 bg-stone-900/60 text-stone-400">
+                            {r.isOwner ? '👑 Host' : 'Listener'}
                           </span>
                         </div>
 
-                        <p className="text-[11px] text-stone-450 leading-normal line-clamp-2">
-                          {r.description || 'Synchronized lounge session'}
+                        <p className="text-[11px] text-stone-400 leading-normal line-clamp-2">
+                          {r.description || 'Live audio track synchronization room'}
                         </p>
 
-                        <div className="flex justify-between items-center pt-2.5 border-t border-stone-100/80 text-[10px] text-stone-450 font-mono">
-                          <span className="flex items-center gap-1 text-emerald-600 font-medium">
+                        <div className="bg-stone-900/50 p-2.5 rounded-xl border border-stone-850 flex items-center justify-between text-[11px]">
+                          <span className="text-stone-300 flex items-center gap-1.5">
+                            <Music className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                            <span className="truncate max-w-[130px] font-medium leading-none">🎵 Visualizer Stream</span>
+                          </span>
+                          
+                          <span className="text-[10px] text-stone-400 font-semibold shrink-0">Live sync</span>
+                        </div>
+
+                        <div className="flex justify-between items-center pt-2.5 border-t border-stone-900 text-[10px] text-stone-400 font-mono">
+                          <span className="flex items-center gap-1 text-emerald-400 font-medium">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
                             ACTIVE
                           </span>
-                          <span className="flex items-center gap-1">
-                            <Users className="w-3.5 h-3.5 text-stone-400" />
-                            {count} connected
-                          </span>
+                          
+                          <div className="flex items-center space-x-3">
+                            <span className="flex items-center gap-1 text-stone-400">
+                              <Users className="w-3.5 h-3.5 text-stone-500" />
+                              {count}
+                            </span>
+
+                            <button 
+                              onClick={() => copyRoomInvite(r.slug)}
+                              className="text-stone-450 hover:text-cyan-400 transition-colors p-1"
+                              title="Copy Invite Link"
+                            >
+                              <Share2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
+
+                        <AnimatePresence>
+                          {copiedCode === r.slug && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 10 }}
+                              className="absolute inset-0 bg-stone-950/95 backdrop-blur-sm flex items-center justify-center p-3 text-center"
+                            >
+                              <div className="space-y-1">
+                                <CheckCircle className="w-5 h-5 text-cyan-400 mx-auto" />
+                                <span className="text-xs font-bold text-white block">Invite URL Copied!</span>
+                                <span className="text-[10px] text-stone-400 font-mono">Share with your listeners.</span>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
                       </div>
                     );
                   })}
                 </div>
               )}
             </div>
-          </div>
 
-          {/* Automated tests grid card */}
-          <div className="bg-white border border-stone-200/85 rounded-2xl p-6 shadow-xl shadow-stone-100 flex flex-col space-y-6">
-            <div className="flex justify-between items-center pb-3 border-b border-stone-100">
-              <div className="flex items-center space-x-2">
-                <Cpu className="w-4 h-4 text-stone-600" />
-                <h3 className="text-sm font-semibold text-stone-900 tracking-tight">Deployment Verification Checklist</h3>
-              </div>
-              
-              <button
-                onClick={runSelfVerificationTests}
-                disabled={testing}
-                className="flex items-center space-x-1 px-3 py-1 bg-stone-900 hover:bg-stone-850 hover:shadow-sm text-stone-50 text-[10px] font-semibold tracking-wider uppercase rounded-md cursor-pointer transition disabled:bg-stone-400 font-bold"
-              >
-                <Play className="w-3 h-3 text-amber-400 animate-pulse" />
-                <span>{testing ? 'Testing...' : 'Run Diagnostics'}</span>
-              </button>
-            </div>
-
-            {/* Checklist cells */}
-            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-              <div className="bg-stone-50 px-3 py-2.5 rounded-lg border border-stone-150 flex items-center justify-between">
-                <span className="text-stone-500">New Registration Schema</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${testResult.new_signup === 'passed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-stone-200 text-stone-500 uppercase'}`}>{testResult.new_signup || 'Ready'}</span>
-              </div>
-              
-              <div className="bg-stone-50 px-3 py-2.5 rounded-lg border border-stone-150 flex items-center justify-between">
-                <span className="text-stone-500">Email Verification Inbound</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${testResult.email_verification === 'passed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-stone-200 text-stone-500 uppercase'}`}>{testResult.email_verification || 'Ready'}</span>
+            {/* TRENDING PUBLIC LOUNGES */}
+            <div className="bg-stone-900/30 border border-stone-850 p-6 rounded-2xl shadow-xl flex flex-col space-y-4">
+              <div className="flex items-center space-x-2 pb-3 border-b border-stone-850">
+                <Flame className="w-5 h-5 text-amber-500 animate-pulse" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">🔥 Trending Public Lounges</h3>
               </div>
 
-              <div className="bg-stone-50 px-3 py-2.5 rounded-lg border border-stone-150 flex items-center justify-between">
-                <span className="text-stone-500">Postgres Session Hook</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${testResult.login_auth === 'passed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-stone-200 text-stone-500 uppercase'}`}>{testResult.login_auth || 'Ready'}</span>
-              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {trendingPublicRooms.map((trObj, idx) => (
+                  <div 
+                    key={idx}
+                    className="p-4 bg-stone-950 border border-stone-850/80 rounded-xl relative overflow-hidden group flex flex-col justify-between space-y-3 min-h-[140px]"
+                  >
+                    <div>
+                      <span className="text-[10px] font-mono font-bold text-cyan-400 bg-cyan-400/5 px-2 py-0.5 rounded-full uppercase">
+                        {trObj.genre}
+                      </span>
+                      <h4 className="text-xs font-bold text-white mt-2 leading-snug group-hover:text-cyan-400 transition duration-150">
+                        {trObj.name}
+                      </h4>
+                      <span className="text-[10px] text-stone-500 block mt-1">Host: {trObj.host}</span>
+                    </div>
 
-              <div className="bg-stone-50 px-3 py-2.5 rounded-lg border border-stone-150 flex items-center justify-between">
-                <span className="text-stone-500">Local Cookie Guard</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${testResult.session_persistence === 'passed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-stone-200 text-stone-500 uppercase'}`}>{testResult.session_persistence || 'Ready'}</span>
-              </div>
+                    <div className="flex items-center justify-between pt-2 border-t border-stone-900 text-[10px] font-mono">
+                      <span className="text-stone-400 flex items-center gap-1">
+                        <Users className="w-3 h-3 text-stone-500" />
+                        {trObj.listeners} listening
+                      </span>
 
-              <div className="bg-stone-50 px-3 py-2.5 rounded-lg border border-stone-150 flex items-center justify-between">
-                <span className="text-stone-500">Profile Recovery Block</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${testResult.profile_auto_recovery === 'passed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-stone-200 text-stone-500 uppercase'}`}>{testResult.profile_auto_recovery || 'Ready'}</span>
-              </div>
-
-              <div className="bg-stone-50 px-3 py-2.5 rounded-lg border border-stone-150 flex items-center justify-between">
-                <span className="text-stone-500">Sanity Runtime checks</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${testResult.runtime_verification === 'passed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-stone-200 text-stone-500 uppercase'}`}>{testResult.runtime_verification || 'Ready'}</span>
+                      <button 
+                        onClick={() => router.push(`/room/${trObj.code}`)} 
+                        className="text-cyan-405 hover:text-cyan-300 font-bold flex items-center gap-0.5 group/btn"
+                      >
+                        Enter <ArrowUpRight className="w-3 h-3 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition duration-150" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+
           </div>
 
-          {/* Core logger terminal */}
-          <div className="bg-stone-900 text-stone-200 border border-stone-850 rounded-2xl shadow-2xl p-5 flex flex-col space-y-4">
+          {/* COLUMN RIGHT (4 cols): Profile Update, Social, Friends activity */}
+          <div className="lg:col-span-4 flex flex-col space-y-6">
             
-            <div className="flex items-center justify-between pb-3 border-b border-stone-800">
-              <div className="flex items-center space-x-2">
-                <Terminal className="w-4 h-4 text-amber-500 animate-pulse" />
-                <span className="text-xs font-mono font-medium uppercase tracking-wider text-stone-400">Security Diagnostics Console</span>
+            {/* SOCIAL / ONLINE FRIENDS PANEL */}
+            <div className="bg-stone-900/30 border border-stone-850 p-6 rounded-2xl shadow-xl flex flex-col space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-stone-850">
+                <div className="flex items-center space-x-2">
+                  <Headphones className="w-4 h-4 text-purple-400" />
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Social Feed</h3>
+                </div>
+                <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
               </div>
-              <button
-                onClick={clearLogs}
-                className="text-[9px] font-mono text-stone-500 hover:text-stone-300 cursor-pointer transition font-bold"
-              >
-                Clear Output
-              </button>
-            </div>
 
-            {/* Output lines */}
-            <div className="h-44 overflow-y-auto font-mono text-[10px] space-y-2 leading-relaxed bg-stone-950 rounded-lg p-3 border border-stone-850 scrollbar-thin">
-              {logs.length === 0 ? (
-                <p className="text-stone-600 italic">Terminal loaded successfully. Awaiting auth operations...</p>
-              ) : (
-                logs.map((log) => {
-                  let alertColor = 'text-sky-400';
-                  if (log.type === 'success') alertColor = 'text-emerald-400';
-                  if (log.type === 'warn') alertColor = 'text-amber-500';
-                  if (log.type === 'error') alertColor = 'text-rose-500';
-
-                  return (
-                    <div key={log.id} className="border-b border-stone-900/60 pb-1 flex items-start space-x-2">
-                      <span className="text-stone-500 shrink-0 select-none">[{log.timestamp}]</span>
-                      <div className="flex-1">
-                        <span className={`${alertColor} font-bold mr-1`}>{log.event}:</span>
-                        <span className="text-stone-300">{log.message}</span>
+              <div className="space-y-4">
+                {virtualFriends.map((f, index) => (
+                  <div key={index} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="relative shrink-0">
+                        <img src={f.avatar} alt={f.name} className="w-9 h-9 rounded-xl border border-stone-800 object-cover" />
+                        {f.online && (
+                          <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 bg-emerald-500 border border-stone-950 rounded-full"></span>
+                        )}
+                      </div>
+                      <div className="min-w-0 leading-tight">
+                        <span className="font-bold text-white truncate block">{f.name}</span>
+                        <span className="text-[10px] text-stone-400 truncate block mt-0.5">{f.status}</span>
                       </div>
                     </div>
-                  );
-                })
-              )}
+
+                    {f.online && (
+                      <button className="text-[10px] font-bold text-purple-400 hover:text-purple-300 transition-colors uppercase select-none cursor-pointer">
+                        Vibe
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
 
-            <div className="text-[10px] font-mono text-stone-500 flex justify-between select-none">
-              <span>SyncWave Engine Core v1.0.0 • Phase 2 Live</span>
-              <span>Dynamic Logging Active</span>
+            {/* RECENT PLAYBACK & QUEUED ITEMS */}
+            <div className="bg-stone-900/30 border border-stone-850 p-6 rounded-2xl shadow-xl flex flex-col space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-stone-850">
+                <div className="flex items-center space-x-2">
+                  <Music className="w-4 h-4 text-cyan-400" />
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Playback Feed</h3>
+                </div>
+              </div>
+
+              <div className="space-y-3.5 text-xs font-mono">
+                {recentMediaActivities.map((act, idx) => (
+                  <div key={idx} className="pb-3 border-b border-stone-900/60 last:border-b-0 last:pb-0 flex items-start space-x-2.5">
+                    <div className="bg-stone-950 p-1.5 rounded-lg text-[10px] text-cyan-400 border border-stone-850">
+                      Sync
+                    </div>
+                    <div className="min-w-0 leading-normal">
+                      <p className="text-stone-300">
+                        <span className="font-bold text-white font-sans">{act.user}</span> {act.action} <span className="text-cyan-400 font-semibold italic">{act.item}</span>
+                      </p>
+                      <span className="text-[9px] text-stone-500 block mt-0.5">{act.time}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* INVITE CARD */}
+            <div className="bg-gradient-to-br from-indigo-950 border border-purple-500/15 p-6 rounded-2xl shadow-2xl relative overflow-hidden flex flex-col justify-between space-y-4">
+              <div className="absolute top-0 right-0 h-24 w-24 bg-cyan-400/5 rounded-full blur-2xl pointer-events-none" />
+              
+              <div>
+                <span className="text-[10px] font-mono font-bold text-purple-400 uppercase tracking-widest block">
+                  Spread the wave
+                </span>
+                <h4 className="text-sm font-bold text-white mt-1 leading-snug">Invite Friends</h4>
+                <p className="text-xs text-stone-400 leading-relaxed mt-1">
+                  Share SyncWave with friends to coordinate song queues and customize listening spaces together.
+                </p>
+              </div>
+
+              <button 
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.origin);
+                  alert('SyncWave Invite URL copied to clipboard!');
+                }}
+                className="w-full bg-stone-950 hover:bg-stone-900 text-stone-200 border border-stone-800 hover:border-stone-700 font-bold py-2 rounded-xl text-xs flex items-center justify-center space-x-1.5 transition active:scale-95 cursor-pointer"
+              >
+                <Link2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span>Copy Share link</span>
+              </button>
             </div>
 
           </div>
@@ -819,117 +811,203 @@ export default function DashboardPage() {
 
       </main>
 
-      {/* Create Room Modal */}
-      {showCreateModal && (
-        <div id="create-room-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-stone-900 border border-stone-800 rounded-2xl shadow-2xl max-w-md w-full p-6 text-stone-100 flex flex-col space-y-5 relative overflow-hidden">
-            {/* Design header */}
-            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600"></div>
-            
-            <div className="flex items-center justify-between pb-3 border-b border-stone-800">
-              <div className="flex items-center space-x-2">
-                <Radio className="w-5 h-5 text-amber-550 animate-pulse shrink-0" />
-                <h3 className="text-sm font-bold text-white tracking-tight">Create Synchronized Lounge Space</h3>
-              </div>
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="p-1 rounded bg-stone-850 hover:bg-stone-800 text-stone-400 hover:text-white transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {createError && (
-              <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 p-3 rounded-lg text-xs flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-rose-450 shrink-0" />
-                <span>{createError}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleCreateRoom} className="space-y-4 text-xs">
-              <div>
-                <label className="text-[10px] font-mono text-stone-400 block uppercase mb-1 font-bold">Space Title Name</label>
-                <input
-                  type="text"
-                  required
-                  maxLength={40}
-                  placeholder="e.g. Saturday Night Acoustic Lounge"
-                  value={createName}
-                  onChange={(e) => setCreateName(e.target.value)}
-                  className="w-full text-xs px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition text-stone-200 font-sans"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-stone-400 block uppercase mb-1 font-bold">Lounge Subtitle Description (optional)</label>
-                <textarea
-                  maxLength={160}
-                  placeholder="e.g. Ambient lofi acoustic sessions, grab a tea and coordinate sounds with us."
-                  value={createDesc}
-                  onChange={(e) => setCreateDesc(e.target.value)}
-                  className="w-full text-xs px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition text-stone-200 font-sans h-20 resize-none"
-                />
-              </div>
-
-              {/* Private/Public Toggle block */}
-              <div className="space-y-1 bg-stone-950 p-3 rounded-xl border border-stone-850">
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-[10px] font-mono text-stone-400 block uppercase font-bold">Lounge Visibility</label>
-                  <span className="text-[9px] font-mono text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded font-bold uppercase">
-                    {createIsPrivate ? 'PRIVATE' : 'PUBLIC'}
-                  </span>
+      {/* EDIT PROFILE MODAL (Aesthetic glassmorphic overlay) */}
+      <AnimatePresence>
+        {showEditProfile && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-stone-900 border border-stone-850 rounded-2xl shadow-2xl max-w-sm w-full p-6 text-stone-200 flex flex-col space-y-5 relative"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-stone-850">
+                <div className="flex items-center space-x-2">
+                  <User className="w-4 h-4 text-cyan-400" />
+                  <h3 className="text-sm font-bold text-white">Edit Lounge Profile</h3>
                 </div>
-                <div className="grid grid-cols-2 gap-2 p-1 bg-stone-900 rounded-lg">
-                  <button
-                    type="button"
-                    onClick={() => setCreateIsPrivate(false)}
-                    className={`py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
-                      !createIsPrivate
-                        ? 'bg-stone-800 text-amber-400 shadow-sm'
-                        : 'text-stone-400 hover:text-stone-300'
-                    }`}
-                  >
-                    Public
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCreateIsPrivate(true)}
-                    className={`py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
-                      createIsPrivate
-                        ? 'bg-stone-800 text-amber-400 shadow-sm'
-                        : 'text-stone-400 hover:text-stone-300'
-                    }`}
-                  >
-                    Private
-                  </button>
-                </div>
-                <span className="text-[10px] text-stone-450 block leading-normal mt-1">
-                  {createIsPrivate 
-                    ? 'Only listeners with the exact secret code can connect to this lounge.' 
-                    : 'This lounge is public and open for anyone on the dashboard to sync sound tracks.'}
-                </span>
-              </div>
-
-              <div className="flex space-x-3 pt-2 font-mono text-xs">
                 <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="flex-1 py-2.5 bg-stone-800 hover:bg-stone-750 text-stone-200 font-semibold rounded-lg text-center transition cursor-pointer"
+                  onClick={() => setShowEditProfile(false)}
+                  className="p-1 rounded bg-stone-850 hover:bg-stone-800 text-stone-400 hover:text-white transition cursor-pointer"
                 >
-                  Cancel
+                  <X className="w-5 h-5" />
                 </button>
+              </div>
+
+              {errorNotice && (
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 p-3 rounded-xl text-xs flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 shrink-0" />
+                  <span>{errorNotice}</span>
+                </div>
+              )}
+
+              {successNotice && (
+                <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 p-3 rounded-xl text-xs flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  <span>{successNotice}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleUpdateProfile} className="space-y-4">
+                <div>
+                  <label className="text-[10px] font-mono text-stone-450 block uppercase mb-1.5 font-bold">Display Name</label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-stone-500">
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </span>
+                    <input
+                      type="text"
+                      required
+                      disabled={updating}
+                      placeholder="e.g. Liam Stone"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      className="w-full text-xs pl-8 pr-3 py-2.5 bg-stone-950 border border-stone-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-cyan-400 transition text-stone-200"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-[10px] font-mono">
+                  <div className="bg-stone-950 p-2.5 rounded-xl border border-stone-850">
+                    <span className="text-stone-500 block text-[9px] uppercase font-bold">Handle</span>
+                    <span className="text-stone-300 truncate block mt-0.5">@{profile?.username}</span>
+                  </div>
+                  <div className="bg-stone-950 p-2.5 rounded-xl border border-stone-850">
+                    <span className="text-stone-500 block text-[9px] uppercase font-bold">Status</span>
+                    <span className="text-emerald-400 font-bold block mt-0.5">VERIFIED</span>
+                  </div>
+                </div>
+
                 <button
                   type="submit"
-                  disabled={creatingRoom || !createName.trim()}
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-stone-950 font-bold rounded-lg text-center transition cursor-pointer shadow-lg shadow-amber-500/10 disabled:bg-stone-850"
+                  disabled={updating || !displayName.trim()}
+                  className="w-full bg-cyan-500 hover:bg-cyan-650 text-stone-950 font-bold py-2.5 rounded-xl text-xs tracking-wider uppercase transition active:scale-98 disabled:bg-stone-800 disabled:text-stone-550"
                 >
-                  {creatingRoom ? 'Calibrating...' : 'Create Room'}
+                  {updating ? 'Saving...' : 'Save Profile Changes'}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* CREATE ROOM MODAL */}
+      <AnimatePresence>
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/80 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-stone-900 border border-stone-850 rounded-2xl shadow-2xl max-w-md w-full p-6 text-stone-100 flex flex-col space-y-5 relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500"></div>
+              
+              <div className="flex items-center justify-between pb-3 border-b border-stone-850">
+                <div className="flex items-center space-x-2">
+                  <Radio className="w-5 h-5 text-cyan-400 animate-pulse shrink-0" />
+                  <h3 className="text-sm font-bold text-white">Host Clean Sound Space</h3>
+                </div>
+                <button
+                  onClick={() => setShowCreateModal(false)}
+                  className="p-1 rounded bg-stone-850 hover:bg-stone-800 text-stone-400 hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
                 </button>
               </div>
-            </form>
+
+              {createError && (
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 p-3 rounded-xl text-xs flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 shrink-0" />
+                  <span>{createError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleCreateRoom} className="space-y-4 text-xs">
+                <div>
+                  <label className="text-[10px] font-mono text-stone-450 block uppercase mb-1 font-bold">Lounge Name</label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={40}
+                    placeholder="e.g. Afternoon Lofi Chillout"
+                    value={createName}
+                    onChange={(e) => setCreateName(e.target.value)}
+                    className="w-full text-xs px-3.5 py-2.5 bg-stone-950 border border-stone-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-cyan-400 transition text-stone-200"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-mono text-stone-450 block uppercase mb-1 font-bold">Description (Optional)</label>
+                  <textarea
+                    maxLength={160}
+                    placeholder="e.g. Ambient chill visual tracks, coordinate queues with us."
+                    value={createDesc}
+                    onChange={(e) => setCreateDesc(e.target.value)}
+                    className="w-full text-xs px-3.5 py-2.5 bg-stone-950 border border-stone-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-cyan-400 transition text-stone-200 h-20 resize-none"
+                  />
+                </div>
+
+                {/* Privacy Toggle */}
+                <div className="space-y-2 bg-stone-950 p-3.5 rounded-2xl border border-stone-850/70">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-mono text-stone-400 block uppercase font-bold">Lounge Privacy</label>
+                    <span className="text-[9px] font-mono text-cyan-450 bg-cyan-500/10 px-2 py-0.5 rounded font-bold uppercase">
+                      {createIsPrivate ? 'PRIVATE' : 'PUBLIC'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 p-1 bg-stone-900 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setCreateIsPrivate(false)}
+                      className={`py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                        !createIsPrivate
+                          ? 'bg-stone-800 text-cyan-400 shadow-sm'
+                          : 'text-stone-450 hover:text-stone-300'
+                      }`}
+                    >
+                      Public
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreateIsPrivate(true)}
+                      className={`py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                        createIsPrivate
+                          ? 'bg-stone-800 text-cyan-400 shadow-sm'
+                          : 'text-stone-450 hover:text-stone-300'
+                      }`}
+                    >
+                      Private
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-stone-500 block leading-normal mt-1">
+                    {createIsPrivate 
+                      ? 'Only followers with the unique code can join.' 
+                      : 'Lounge is listed public. Anyone can connect and Sync.'}
+                  </span>
+                </div>
+
+                <div className="flex space-x-3 pt-2 font-mono text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateModal(false)}
+                    className="flex-1 py-2.5 bg-stone-800 hover:bg-stone-750 text-stone-200 font-bold rounded-xl text-center transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={creatingRoom || !createName.trim()}
+                    className="flex-1 py-2.5 bg-cyan-400 hover:bg-cyan-500 text-stone-950 font-bold rounded-xl text-center transition cursor-pointer shadow-lg disabled:bg-stone-850"
+                  >
+                    {creatingRoom ? 'Calibrating...' : 'Create Lounge'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
 
     </div>
   );
