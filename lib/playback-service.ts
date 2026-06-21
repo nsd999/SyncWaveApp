@@ -146,6 +146,33 @@ export class PlaybackSyncService {
   }
 
   /**
+   * Updates only current_time in playback_state without raising heavy seek flags.
+   */
+  static async updateTime(
+    roomId: string, 
+    currentTime: number, 
+    duration: number, 
+    updatedByUserId?: string
+  ): Promise<void> {
+    const supabase = getSupabase() as any;
+    if (!supabase) return;
+
+    try {
+      await supabase
+        .from('playback_state')
+        .update({
+          current_time: currentTime,
+          duration: duration,
+          last_sync_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        } as any)
+        .eq('room_id', roomId);
+    } catch (e: any) {
+      console.error('[PlaybackSyncService] updateTime error:', e.message);
+    }
+  }
+
+  /**
    * Changes the media URL loaded in the player.
    */
   static async updateMedia(

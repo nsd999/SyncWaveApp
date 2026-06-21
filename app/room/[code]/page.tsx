@@ -43,7 +43,10 @@ import {
   PlusCircle,
   Sparkles,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Sun,
+  Moon,
+  Laptop
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PlaybackState } from '@/types/playback';
@@ -126,6 +129,64 @@ export default function RoomPage() {
   const [youtubeFailed, setYoutubeFailed] = React.useState(false);
   const [urlError, setUrlError] = React.useState<string | null>(null);
 
+  // Theme management states
+  const [theme, setTheme] = React.useState<'light' | 'dark' | 'system'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('syncwave-theme');
+      if (saved === 'light' || saved === 'dark' || saved === 'system') {
+        return saved;
+      }
+    }
+    return 'system';
+  });
+  const [resolvedTheme, setResolvedTheme] = React.useState<'light' | 'dark'>('dark');
+  const [showThemeMenu, setShowThemeMenu] = React.useState(false);
+
+  // YouTube Metadata Preview State
+  const [isFetchingPreview, setIsFetchingPreview] = React.useState(false);
+  const [ytPreview, setYtPreview] = React.useState<{
+    videoId: string;
+    title: string;
+    thumbnailUrl: string;
+    duration: number;
+    channelName: string;
+    publishedDate: string;
+    embeddable: boolean;
+    rawUrl: string;
+  } | null>(null);
+
+  // Drag-and-drop file upload simulation
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
+  const [uploadedFileName, setUploadedFileName] = React.useState<string | null>(null);
+
+  // Theme Sync logic
+  React.useEffect(() => {
+    if (theme === 'system') {
+      const media = window.matchMedia('(prefers-color-scheme: dark)');
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setResolvedTheme(media.matches ? 'dark' : 'light');
+      
+      const listener = (e: MediaQueryListEvent) => {
+        setResolvedTheme(e.matches ? 'dark' : 'light');
+      };
+      media.addEventListener('change', listener);
+      return () => media.removeEventListener('change', listener);
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setResolvedTheme(theme);
+    }
+    localStorage.setItem('syncwave-theme', theme);
+  }, [theme]);
+
+  React.useEffect(() => {
+    if (resolvedTheme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [resolvedTheme]);
+
   React.useEffect(() => {
     if (youtubeFailed) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -134,6 +195,7 @@ export default function RoomPage() {
   }, [mediaUrl, youtubeFailed]);
   
   const playerRef = React.useRef<HTMLVideoElement | null>(null);
+  const ytPlayerRef = React.useRef<any>(null);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
 
   const supabaseConnected = isSupabaseConfigured();
@@ -549,6 +611,208 @@ export default function RoomPage() {
     setDuration(playerRef.current.duration || 0);
   };
 
+  // HELPER FOR YOUTUBE ISO duration parser
+  const parseISO8601Duration = (durationStr: string): number => {
+    if (!durationStr) return 180;
+    const regex = /P(?:([0-9.]+)D)?T(?:([0-9.]+)H)?(?:([0-9.]+)M)?(?:([0-9.]+)S)?/;
+    const matches = durationStr.match(regex);
+    if (!matches) return 180;
+    const days = parseFloat(matches[1] || '0');
+    const hours = parseFloat(matches[2] || '0');
+    const minutes = parseFloat(matches[3] || '0');
+    const seconds = parseFloat(matches[4] || '0');
+    return (days * 86400) + (hours * 3600) + (minutes * 60) + seconds;
+  };
+
+  const fetchYouTubeMetadata = async (url: string) => {
+    const videoId = getYouTubeId(url);
+    if (!videoId) return;
+
+    setIsFetchingPreview(true);
+    setUrlError(null);
+    try {
+      const apiKey = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY || "AIzaSyDDlzue5y2v_uY6iqK05Pf948yUbmCqxsc";
+      const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${videoId}&key=${apiKey}`);
+      if (!res.ok) throw new Error("Failed to fetch YouTube metadata");
+      const data = await res.json();
+      if (!data.items || data.items.length === 0) {
+        throw new Error("No YouTube video found with this URL or ID.");
+      }
+      const item = data.items[0];
+      const snippet = item.snippet;
+      const contentDetails = item.contentDetails;
+      const status = item.status;
+
+      const parsedDuration = parseISO8601Duration(contentDetails?.duration);
+      
+      setYtPreview({
+        videoId,
+        title: snippet.title || "Unknown YouTube Video",
+        thumbnailUrl: snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+        duration: parsedDuration,
+        channelName: snippet.channelTitle || "Unknown Channel",
+        publishedDate: snippet.publishedAt ? new Date(snippet.publishedAt).toLocaleDateString() : "",
+        embeddable: status?.embeddable !== false,
+        rawUrl: url
+      });
+    } catch (err: any) {
+      console.error(err);
+      setUrlError(err.message || "Failed to retrieve YouTube metadata.");
+      setYtPreview(null);
+    } finally {
+      setIsFetchingPreview(false);
+    }
+  };
+
+  // Debounced URL watch for fetching YouTube Preview
+  React.useEffect(() => {
+    const delayDebounceFn = setTimeout(() => {
+      const url = queueUrlInput.trim();
+      if (!url) {
+        setYtPreview(null);
+        return;
+      }
+      const isYt = url.includes('youtube.com') || url.includes('youtu.be') || url.includes('/embed/');
+      if (isYt) {
+        const videoId = getYouTubeId(url);
+        if (videoId) {
+          fetchYouTubeMetadata(url);
+        } else {
+          setYtPreview(null);
+        }
+      } else {
+        setYtPreview(null);
+      }
+    }, 600);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [queueUrlInput]);
+
+  // Load clean YouTube Frame API on layout ready
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!(window as any).YT) {
+      const tag = document.createElement('script');
+      tag.src = "https://www.youtube.com/iframe_api";
+      const firstScriptTag = document.getElementsByTagName('script')[0];
+      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+    }
+  }, []);
+
+  const mountYoutubePlayer = React.useCallback((videoId: string) => {
+    if (typeof window === 'undefined' || !(window as any).YT || !(window as any).YT.Player) {
+      setTimeout(() => mountYoutubePlayer(videoId), 300);
+      return;
+    }
+
+    if (ytPlayerRef.current) {
+      try {
+        ytPlayerRef.current.destroy();
+      } catch (e) {}
+      ytPlayerRef.current = null;
+    }
+
+    try {
+      ytPlayerRef.current = new (window as any).YT.Player('youtube-player', {
+        videoId: videoId,
+        playerVars: {
+          autoplay: isPlaying ? 1 : 0,
+          start: Math.floor(currentTime),
+          controls: currentIsHost ? 1 : 0,
+          disablekb: currentIsHost ? 0 : 1,
+          modestbranding: 1,
+          rel: 0,
+          origin: typeof window !== 'undefined' ? window.location.origin : '',
+        },
+        events: {
+          onReady: (event: any) => {
+            console.log("YouTube API player loaded and bound actively.");
+            if (isPlaying) {
+              event.target.playVideo();
+            } else {
+              event.target.pauseVideo();
+            }
+            event.target.seekTo(currentTime, true);
+          },
+          onStateChange: (event: any) => {
+            if (!currentIsHost) return;
+            if (isUpdatingFromRemote.current) return;
+
+            // Player state tags: 1 = PLAYING, 2 = PAUSED, 0 = ENDED
+            if (event.data === 1) {
+              setIsPlaying(true);
+              const cur = ytPlayerRef.current?.getCurrentTime() || 0;
+              PlaybackSyncService.play(room?.id || '', cur, user?.id);
+            } else if (event.data === 2) {
+              setIsPlaying(false);
+              const cur = ytPlayerRef.current?.getCurrentTime() || 0;
+              PlaybackSyncService.pause(room?.id || '', cur, user?.id);
+            } else if (event.data === 0) {
+              handleMediaEnded();
+            }
+          },
+          onError: (event: any) => {
+            const code = event.data;
+            console.warn("YouTube embedding handshake error:", code);
+            if (code === 101 || code === 150) {
+              setUrlError("Embed Allowed Blocked: YouTube video creator does not permit remote player embeds.");
+              setYoutubeFailed(true);
+            } else {
+              setUrlError(`YouTube playback event reported error code: ${code}`);
+              setYoutubeFailed(true);
+            }
+          }
+        }
+      });
+    } catch (e) {
+      console.error("Failed to mount YouTube controller:", e);
+    }
+  }, [room, user, currentIsHost, isPlaying, currentTime]);
+
+  React.useEffect(() => {
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    const ytId = isYouTube ? getYouTubeId(mediaUrl) : null;
+    
+    if (isYouTube && ytId) {
+      mountYoutubePlayer(ytId);
+    } else {
+      if (ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.destroy();
+        } catch (e) {}
+        ytPlayerRef.current = null;
+      }
+    }
+  }, [mediaUrl]);
+
+  // Regular progress tick for YouTube player
+  React.useEffect(() => {
+    let tickInter: NodeJS.Timeout | null = null;
+    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+    
+    if (isPlaying && isYouTube) {
+      tickInter = setInterval(() => {
+        if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === 'function') {
+          const cur = ytPlayerRef.current.getCurrentTime();
+          setCurrentTime(cur);
+          
+          if (ytPlayerRef.current.getDuration) {
+            setDuration(ytPlayerRef.current.getDuration() || 0);
+          }
+
+          if (currentIsHost && room) {
+            // Update time in the database occasionally (throttle rate)
+            PlaybackSyncService.updateTime(room.id, cur, duration || 180, user?.id);
+          }
+        }
+      }, 1000);
+    }
+
+    return () => {
+      if (tickInter) clearInterval(tickInter);
+    };
+  }, [isPlaying, mediaUrl, currentIsHost, room, user, duration]);
+
   // HELPER FOR YOUTUBE ID DETECTION
   const getYouTubeId = (url: string) => {
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
@@ -583,29 +847,39 @@ export default function RoomPage() {
     const isAudio = url.endsWith('.mp3') || url.includes('Helix') || url.includes('audio');
     const computedType = isYt ? 'youtube' : (isAudio ? 'audio' : 'video');
 
-    if (!finalTitle) {
+    let computedDuration = 180; // Default fallback (3 mins)
+    let thumbnail = `https://picsum.photos/seed/${encodeURIComponent(url)}/120/90`;
+
+    if (isYt && ytPreview && ytPreview.videoId === getYouTubeId(url)) {
+      finalTitle = finalTitle || ytPreview.title;
+      computedDuration = ytPreview.duration;
+      thumbnail = ytPreview.thumbnailUrl;
+    } else {
+      if (!finalTitle) {
+        if (isYt) {
+          const ytId = getYouTubeId(url);
+          finalTitle = ytId ? `YouTube Sync Track (${ytId})` : 'YouTube Stream';
+        } else {
+          finalTitle = url.substring(url.lastIndexOf('/') + 1) || 'Custom Stream';
+        }
+      }
+
+      // Default duration metrics
+      if (url.includes('BigBuckBunny')) computedDuration = 596;
+      if (url.includes('Sintel')) computedDuration = 653;
+      if (url.includes('Helix-Song-1')) computedDuration = 372;
+
       if (isYt) {
-        const ytId = getYouTubeId(url);
-        finalTitle = ytId ? `YouTube Sync Track (${ytId})` : 'YouTube Stream';
+        thumbnail = `https://img.youtube.com/vi/${getYouTubeId(url)}/hqdefault.jpg`;
       } else {
-        finalTitle = url.substring(url.lastIndexOf('/') + 1) || 'Custom Stream';
+        thumbnail = `https://picsum.photos/seed/${encodeURIComponent(finalTitle)}/120/90`;
       }
     }
-
-    // Default duration metrics
-    let computedDuration = 180; // Default fallback (3 mins)
-    if (url.includes('BigBuckBunny')) computedDuration = 596;
-    if (url.includes('Sintel')) computedDuration = 653;
-    if (url.includes('Helix-Song-1')) computedDuration = 372;
 
     const addedByName = currentMember?.profiles?.display_name || currentMember?.display_name || 'Host';
     const addedByUserId = currentMember?.user_id || currentMember?.guest_id || null;
 
     writeLog('info', 'Media Queue', `Adding tracking queue index reference for ${finalTitle}`);
-
-    const thumbnail = isYt 
-      ? `https://img.youtube.com/vi/${getYouTubeId(url)}/hqdefault.jpg`
-      : `https://picsum.photos/seed/${encodeURIComponent(finalTitle)}/120/90`;
 
     const added = await PlaybackSyncService.addToQueue(
       room.id,
@@ -621,6 +895,7 @@ export default function RoomPage() {
     if (added) {
       setQueueUrlInput('');
       setQueueTitleInput('');
+      setYtPreview(null);
       // Refetch queue
       const items = await PlaybackSyncService.fetchQueue(room.id);
       setQueue(items);
@@ -633,6 +908,66 @@ export default function RoomPage() {
     await PlaybackSyncService.removeFromQueue(id);
     const items = await PlaybackSyncService.fetchQueue(room.id);
     setQueue(items);
+  };
+
+  const handleFileImportMock = async (file: File) => {
+    if (!room) return;
+    const isAudio = file.type.startsWith('audio/') || file.name.endsWith('.mp3');
+    const isVideo = file.type.startsWith('video/') || file.name.endsWith('.mp4');
+    
+    if (!isAudio && !isVideo) {
+      setUrlError("Format not supported. Please import high-fidelity audio (MP3) or video (MP4) packets.");
+      setTimeout(() => setUrlError(null), 5000);
+      return;
+    }
+
+    setUploadProgress(10);
+    const intervalsTimer = setInterval(() => {
+      setUploadProgress((p) => {
+        if (p === null) return null;
+        if (p >= 100) {
+          clearInterval(intervalsTimer);
+          return 100;
+        }
+        return p + 15;
+      });
+    }, 150);
+
+    setTimeout(async () => {
+      setUploadProgress(null);
+      setUploadedFileName(file.name);
+      
+      // Auto queue mock synced track
+      const sampleUrl = isAudio 
+        ? "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" 
+        : "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+      
+      const title = file.name || (isAudio ? "Imported Local Audio" : "Imported Local Video");
+      const duration = isAudio ? 372 : 596;
+      const thumbnail = isAudio 
+        ? `https://picsum.photos/seed/${encodeURIComponent(title)}/120/90`
+        : `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.png`;
+      
+      const addedByName = currentMember?.profiles?.display_name || currentMember?.display_name || 'Host';
+      const addedByUserId = currentMember?.user_id || currentMember?.guest_id || null;
+
+      await PlaybackSyncService.addToQueue(
+        room.id,
+        sampleUrl,
+        isAudio ? 'audio' : 'video',
+        title,
+        duration,
+        thumbnail,
+        addedByUserId || undefined,
+        addedByName
+      );
+
+      // Refetch queue playlist
+      const items = await PlaybackSyncService.fetchQueue(room.id);
+      setQueue(items);
+
+      setTimeout(() => setUploadedFileName(null), 3000);
+    }, 1600);
   };
 
   const handlePlayNextInQueue = async (item: any) => {
@@ -721,7 +1056,7 @@ export default function RoomPage() {
     }, 2000);
   };
 
-  const handleMediaEnded = async () => {
+  async function handleMediaEnded() {
     if (!room || !currentIsHost) return;
     writeLog('info', 'Sync Wave Engine', 'Active media stream finished playback.');
     
@@ -1323,17 +1658,18 @@ export default function RoomPage() {
   }
 
   // Active user / host is resolved! Render pristine Collaborative Workspace
-  const isHost = room.host_id === user?.id;  return (
-    <div id="room-viewport" className="min-h-screen bg-stone-950 text-stone-100 flex flex-col font-sans select-none overflow-y-auto pb-16 relative">
+  const isHost = room.host_id === user?.id;
+  return (
+    <div id="room-viewport" className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col font-sans select-none overflow-y-auto pb-16 transition-colors duration-200 relative">
       
       {/* Background decoration */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.05),transparent_80%)] pointer-events-none z-0"></div>
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-stone-800 to-transparent"></div>
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.03),transparent_80%)] pointer-events-none z-0"></div>
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-stone-200 dark:via-stone-800 to-transparent"></div>
 
       <div className="max-w-6xl mx-auto w-full px-4 pt-6 space-y-6 relative z-10">
 
         {/* 1. ROOM HEADER CARD */}
-        <div id="room-header-container" className="bg-stone-900/40 backdrop-blur-md rounded-2xl border border-stone-850 p-4 space-y-3.5 col-span-full">
+        <div id="room-header-container" className="bg-white dark:bg-stone-900/40 backdrop-blur-lg rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3.5 col-span-full shadow-sm dark:shadow-none">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center space-x-3 min-w-0">
               <div className="p-2 bg-gradient-to-br from-amber-500 to-rose-500 rounded-xl text-stone-950 shadow-lg shadow-amber-500/10 shrink-0">
@@ -1341,37 +1677,118 @@ export default function RoomPage() {
               </div>
               <div className="space-y-0.5 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-base font-extrabold tracking-tight text-white">{room.name}</h1>
-                  <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                  <h1 className="text-base font-extrabold tracking-tight text-stone-950 dark:text-white">{room.name}</h1>
+                  <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-500 dark:text-amber-400 font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
                     CODE: {room.slug}
                   </span>
                   {currentIsHost && (
-                    <span className="flex items-center gap-1 text-[8px] bg-rose-500/10 border border-rose-500/20 text-rose-455 font-extrabold px-1.5 py-0.5 rounded-full uppercase tracking-wider animate-pulse">
+                    <span className="flex items-center gap-1 text-[8px] bg-rose-500/10 border border-rose-500/20 text-rose-500 dark:text-rose-400 font-extrabold px-1.5 py-0.5 rounded-full uppercase tracking-wider animate-pulse">
                       <Crown className="w-2.5 h-2.5" /> HOST CONTROL
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-stone-400 leading-relaxed truncate max-w-sm sm:max-w-md">
+                <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed truncate max-w-sm sm:max-w-md">
                   {room.description || 'Elevated Synchronized Listening Lounge'}
                 </p>
               </div>
             </div>
 
             {/* Header control buttons */}
-            <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-center shrink-0">
+              
+              {/* THEME SELECTION BAR */}
+              <div className="relative" id="theme-selector-container">
+                <button
+                  onClick={() => setShowThemeMenu(!showThemeMenu)}
+                  className={`p-1.5 rounded-xl border flex items-center justify-center transition active:scale-95 cursor-pointer ${
+                    resolvedTheme === 'dark'
+                      ? 'bg-stone-850 border-stone-800 text-stone-300 hover:text-white hover:bg-stone-800'
+                      : 'bg-stone-100 border-stone-200 text-stone-600 hover:text-stone-900 hover:bg-stone-200'
+                  }`}
+                  title="Change Theme Mode"
+                >
+                  {theme === 'light' && <Sun className="w-3.5 h-3.5 text-amber-500" />}
+                  {theme === 'dark' && <Moon className="w-3.5 h-3.5 text-purple-405" />}
+                  {theme === 'system' && <Laptop className="w-3.5 h-3.5 text-cyan-505" />}
+                </button>
+
+                <AnimatePresence>
+                  {showThemeMenu && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setShowThemeMenu(false)}></div>
+                      <motion.div
+                        initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                        className={`absolute right-0 mt-2 w-36 rounded-xl shadow-xl z-50 p-1.5 border font-mono text-[10px] font-bold ${
+                          resolvedTheme === 'dark'
+                            ? 'bg-stone-900 border-stone-800 text-stone-200'
+                            : 'bg-white border-stone-200 text-stone-800'
+                        }`}
+                      >
+                        <button
+                          onClick={() => {
+                            setTheme('light');
+                            setShowThemeMenu(false);
+                          }}
+                          className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition cursor-pointer ${
+                            theme === 'light'
+                              ? 'bg-amber-500/10 text-amber-500'
+                              : resolvedTheme === 'dark' ? 'hover:bg-stone-800' : 'hover:bg-stone-100'
+                          }`}
+                        >
+                          <Sun className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                          <span>LIGHT</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setTheme('dark');
+                            setShowThemeMenu(false);
+                          }}
+                          className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition cursor-pointer ${
+                            theme === 'dark'
+                              ? 'bg-purple-500/10 text-purple-400'
+                              : resolvedTheme === 'dark' ? 'hover:bg-stone-800' : 'hover:bg-stone-100'
+                          }`}
+                        >
+                          <Moon className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                          <span>DARK</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setTheme('system');
+                            setShowThemeMenu(false);
+                          }}
+                          className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition cursor-pointer ${
+                            theme === 'system'
+                              ? 'bg-cyan-500/10 text-cyan-405'
+                              : resolvedTheme === 'dark' ? 'hover:bg-stone-800' : 'hover:bg-stone-100'
+                          }`}
+                        >
+                          <Laptop className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                          <span>SYSTEM</span>
+                        </button>
+                      </motion.div>
+                    </>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <button
                 onClick={copyInviteLink}
                 id="copy-invite-btn"
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-850 hover:bg-stone-800 border border-stone-850 rounded-xl text-xs text-stone-300 font-semibold transition cursor-pointer hover:border-stone-700 active:scale-95 whitespace-nowrap"
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-850 rounded-xl text-xs text-stone-700 dark:text-stone-300 font-semibold transition cursor-pointer hover:border-stone-300 dark:hover:border-stone-750 active:scale-95 whitespace-nowrap"
               >
                 {copiedLink ? (
                   <>
-                    <Check className="w-3.5 h-3.5 text-green-400 animate-bounce" />
-                    <span className="text-green-405">Copied!</span>
+                    <Check className="w-3.5 h-3.5 text-green-500 animate-bounce" />
+                    <span className="text-green-600 dark:text-green-400">Copied!</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-3.5 h-3.5 text-stone-400" />
+                    <Copy className="w-3.5 h-3.5 text-stone-500 dark:text-stone-400" />
                     <span>Copy Code</span>
                   </>
                 )}
@@ -1379,7 +1796,7 @@ export default function RoomPage() {
 
               <button
                 onClick={shareRoom}
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 rounded-xl text-xs text-amber-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-xl text-xs text-amber-600 dark:text-amber-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Share Lounge</span>
@@ -1388,7 +1805,7 @@ export default function RoomPage() {
               <button
                 onClick={leaveRoom}
                 id="leave-room-btn"
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-850 hover:bg-rose-950/30 border border-stone-850 hover:border-rose-900/30 rounded-xl text-xs text-stone-350 hover:text-rose-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-100 dark:bg-stone-850 hover:bg-rose-50 dark:hover:bg-rose-950/30 border border-stone-200 dark:border-stone-850 hover:border-rose-250 dark:hover:border-rose-905/30 rounded-xl text-xs text-stone-600 dark:text-stone-350 hover:text-rose-600 dark:hover:text-rose-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Leave</span>
@@ -1397,13 +1814,13 @@ export default function RoomPage() {
           </div>
 
           {/* Connected state rail & stats */}
-          <div className="flex flex-wrap items-center gap-4 text-[11px] font-mono text-stone-400 border-t border-stone-850/60 pt-3">
+          <div className="flex flex-wrap items-center gap-4 text-[11px] font-mono text-stone-500 dark:text-stone-450 border-t border-stone-205 dark:border-stone-850/60 pt-3">
             <div className="flex items-center space-x-1.5">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
-              <span className="text-stone-300 font-semibold uppercase tracking-wider text-[9px]">Cluster: Sync Active</span>
+              <span className="text-stone-600 dark:text-stone-300 font-semibold uppercase tracking-wider text-[9px]">Cluster: Sync Active</span>
             </div>
-            <div className="h-3 w-px bg-stone-850 hidden sm:block" />
-            <div className="flex items-center space-x-1.5 text-stone-400">
+            <div className="h-3 w-px bg-stone-200 dark:bg-stone-850 hidden sm:block" />
+            <div className="flex items-center space-x-1.5 text-stone-550 dark:text-stone-400">
               <Users className="w-3.5 h-3.5 text-amber-500" />
               <span>{members.length} member{members.length === 1 ? '' : 's'} connected</span>
             </div>
@@ -1414,8 +1831,8 @@ export default function RoomPage() {
         {members.length === 1 && (
           <div className="bg-amber-500/5 border border-amber-500/10 rounded-2xl p-4 text-center space-y-2 transition-all col-span-full">
             <Sparkles className="w-5 h-5 text-amber-500 mx-auto animate-pulse" />
-            <p className="text-sm font-bold text-white">Nobody else is here yet.</p>
-            <p className="text-xs text-stone-450 leading-relaxed max-w-md mx-auto">
+            <p className="text-sm font-bold text-stone-900 dark:text-white">Nobody else is here yet.</p>
+            <p className="text-xs text-stone-500 dark:text-stone-450 leading-relaxed max-w-md mx-auto">
               Invite friends to experience SyncWave together with real-time media sync!
             </p>
             <button
@@ -1439,40 +1856,52 @@ export default function RoomPage() {
           const ytId = isYouTube ? getYouTubeId(mediaUrl) : null;
 
           return (
-            <div id="media-player-container" className="bg-stone-900/40 border border-stone-850 rounded-2xl p-5 space-y-4 shadow-xl overflow-hidden relative">
-              <div className="absolute inset-0 bg-gradient-to-b from-stone-900/60 to-transparent pointer-events-none z-0"></div>
+            <div id="media-player-container" className="bg-white dark:bg-stone-900/40 border border-stone-200 dark:border-stone-850 rounded-2xl p-5 space-y-4 shadow-sm dark:shadow-xl overflow-hidden relative">
+              <div className="absolute inset-0 bg-gradient-to-b from-stone-50/20 dark:from-stone-900/60 to-transparent pointer-events-none z-0"></div>
 
               {/* Playing track metadata */}
               <div className="flex items-center justify-between z-10 relative gap-3">
                 <div className="space-y-0.5 min-w-0">
-                  <span className="text-[9px] bg-amber-500/15 border border-amber-500/25 text-amber-400 font-mono px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold flex items-center gap-1 w-max">
+                  <span className="text-[9px] bg-amber-500/15 border border-amber-500/25 text-amber-600 dark:text-amber-400 font-mono px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold flex items-center gap-1 w-max">
                     <Sparkles className="w-2.5 h-2.5 animate-bounce text-amber-500" /> NOW PLAYING
                   </span>
-                  <h2 className="text-sm font-extrabold text-white truncate max-w-sm">
+                  <h2 className="text-sm font-extrabold text-stone-950 dark:text-white truncate max-w-sm sm:max-w-md">
                     {isYouTube ? (queue.length > 0 ? queue[0].title : 'YouTube Video Stream') : (mediaUrl ? mediaUrl.substring(mediaUrl.lastIndexOf('/') + 1) : 'No Stream Loaded')}
                   </h2>
                 </div>
                 
                 <div className="shrink-0">
-                  <span className={`text-[9px] font-mono font-bold uppercase px-2.5 py-1 rounded-lg ${currentIsHost ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-stone-900 border border-stone-850 text-stone-400'}`}>
+                  <span className={`text-[9px] font-mono font-bold uppercase px-2.5 py-1 rounded-lg ${currentIsHost ? 'bg-rose-500/10 text-rose-500 dark:text-rose-405 border border-rose-500/20' : 'bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-850 text-stone-600 dark:text-stone-400'}`}>
                     {currentIsHost ? 'HOST CONSOLE' : 'LISTENER'}
                   </span>
                 </div>
               </div>
 
               {/* Actual player workspace */}
-              <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-stone-850 z-10 select-none">
+              <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-stone-200 dark:border-stone-850 z-10 select-none">
                 {mediaUrl ? (
-                  isYouTube && ytId ? (
+                  youtubeFailed ? (
+                    /* Embed restricted fallback UI state */
+                    <div id="mediacard-failed-fallback" className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-3 bg-stone-900 text-stone-200">
+                      <div className="w-12 h-12 bg-rose-500/15 border border-rose-500/20 text-rose-400 rounded-2xl flex items-center justify-center animate-bounce">
+                        <ShieldAlert className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="text-xs font-bold text-stone-205 uppercase tracking-wider font-mono">Restricted Handshake Detected</h3>
+                        <p className="text-[11px] text-stone-400 leading-relaxed max-w-xs mx-auto">
+                          Owner has disabled remote player embedding for this video.
+                        </p>
+                      </div>
+                      <div className="pt-2 text-[10px] text-stone-400 text-left bg-stone-950/70 p-3 rounded-lg border border-stone-850 space-y-1 w-full max-w-xs font-mono">
+                        <p className="text-amber-500 font-bold uppercase mb-1">Actions to Resolve:</p>
+                        <p>1. Copy direct sample track preset below.</p>
+                        <p>2. Try loading a different YouTube stream.</p>
+                      </div>
+                    </div>
+                  ) : isYouTube && ytId ? (
                     <div className="w-full h-full relative">
-                      <iframe
-                        src={`https://www.youtube.com/embed/${ytId}?autoplay=${isPlaying ? 1 : 0}&start=${Math.floor(currentTime)}&enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
-                        className="w-full h-full object-contain"
-                        title="SyncWave YouTube"
-                        frameBorder="0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
+                      <div id="youtube-player" className="w-full h-full" />
+                      
                       {/* Overlay pointer blocker for Guest so they cannot click play inside YouTube directly bypassing Host alignment */}
                       {!currentIsHost && (
                         <div className="absolute inset-0 bg-transparent z-20 pointer-events-auto"></div>
@@ -1481,11 +1910,11 @@ export default function RoomPage() {
                   ) : (
                     mediaType === 'audio' ? (
                       /* Styled rotating turntable view */
-                      <div className="w-full h-full flex flex-col items-center justify-center py-6 relative">
+                      <div className="w-full h-full flex flex-col items-center justify-center py-6 relative bg-stone-900">
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(245,158,11,0.03),transparent_70%)] pointer-events-none"></div>
                         
                         {/* Rotating visualizer vinyl record circle */}
-                        <div className={`p-6 bg-stone-900 border-[5px] border-stone-800 rounded-full flex items-center justify-center shadow-2xl relative ${isPlaying ? 'animate-spin' : ''}`} style={{ animationDuration: '24s' }}>
+                        <div className={`p-6 bg-stone-950 border-[5px] border-stone-800 rounded-full flex items-center justify-center shadow-2xl relative ${isPlaying ? 'animate-spin' : ''}`} style={{ animationDuration: '24s' }}>
                           <Disc className="w-16 h-16 text-amber-500" />
                           <div className="absolute w-4 h-4 bg-stone-950 rounded-full border-2 border-stone-800 flex items-center justify-center">
                             <div className="w-1 h-1 bg-stone-600 rounded-full"></div>
@@ -1523,7 +1952,7 @@ export default function RoomPage() {
                     )
                   )
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-4">
+                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-4 bg-stone-950">
                     <div className="w-12 h-12 bg-stone-900 border border-stone-850 text-stone-500 rounded-xl flex items-center justify-center shadow-xl">
                       <Tv className="w-6 h-6 opacity-60" />
                     </div>
@@ -1542,7 +1971,7 @@ export default function RoomPage() {
               {/* Time slider & media coordinates */}
               {mediaUrl && (
                 <div className="space-y-2 z-10 relative">
-                  <div className="flex items-center justify-between text-xs font-mono text-stone-450">
+                  <div className="flex items-center justify-between text-xs font-mono text-stone-500 dark:text-stone-450">
                     <span className="text-amber-500 font-bold">{formatTime(currentTime)}</span>
                     <span>{formatTime(duration)}</span>
                   </div>
@@ -1559,14 +1988,14 @@ export default function RoomPage() {
                       onChange={handleSliderChange}
                       onMouseUp={handleSliderRelease}
                       onTouchEnd={handleSliderRelease}
-                      className="w-full accent-amber-500 h-1 bg-stone-800 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed group-hover:h-1.5 transition-all"
+                      className="w-full accent-amber-500 h-1 bg-stone-200 dark:bg-stone-800 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed group-hover:h-1.5 transition-all"
                     />
                   </div>
                 </div>
               )}
 
               {/* Stage Controls */}
-              <div className="flex items-center justify-between gap-4 pt-3 border-t border-stone-850/60 z-10 relative">
+              <div className="flex items-center justify-between gap-4 pt-3 border-t border-stone-200 dark:border-stone-850/60 z-10 relative">
                 
                 <div className="flex items-center space-x-2">
                   {currentIsHost ? (
@@ -1575,7 +2004,7 @@ export default function RoomPage() {
                         <button
                           onClick={handleHostPause}
                           id="host-pause-btn"
-                          className="p-2.5 bg-stone-850 hover:bg-stone-800 text-amber-500 border border-stone-800 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs font-bold leading-none gap-2 px-4 shadow-lg"
+                          className="p-2.5 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-800 text-amber-500 border border-stone-205 dark:border-stone-800 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs font-bold leading-none gap-2 px-4 shadow-sm dark:shadow-lg"
                           title="Pause Stream"
                         >
                           <Pause className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
@@ -1598,10 +2027,10 @@ export default function RoomPage() {
                         <button
                           onClick={handleSkipNext}
                           id="host-skip-btn"
-                          className="p-2.5 bg-stone-850 hover:bg-stone-800 border border-stone-850 text-stone-300 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs gap-1.5"
+                          className="p-2.5 bg-stone-100 dark:bg-stone-850 hover:bg-stone-200 dark:hover:bg-stone-850/80 border border-stone-200 dark:border-stone-850 text-stone-700 dark:text-stone-300 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs gap-1.5 font-bold"
                           title="Skip current media"
                         >
-                          <SkipForward className="w-3.5 h-3.5 text-stone-400" />
+                          <SkipForward className="w-3.5 h-3.5 text-stone-550 dark:text-stone-400 animate-pulse" />
                           <span>SKIP TRACK</span>
                         </button>
                       )}
@@ -1655,23 +2084,23 @@ export default function RoomPage() {
 
         {/* Collapsible Host Tools underneath player on the left column */}
         {currentIsHost && (
-          <div id="host-tools-container" className="bg-stone-900/40 border border-stone-850 rounded-2xl overflow-hidden shadow-xl">
+          <div id="host-tools-container" className="bg-white dark:bg-stone-900/40 border border-stone-200 dark:border-stone-850 rounded-2xl overflow-hidden shadow-sm dark:shadow-xl transition-colors duration-200">
             <button
               onClick={() => setIsHostToolsOpen(!isHostToolsOpen)}
-              className="w-full flex items-center justify-between p-4 bg-stone-900/80 hover:bg-stone-850/60 transition cursor-pointer text-left"
+              className="w-full flex items-center justify-between p-4 bg-stone-50 dark:bg-stone-900/80 hover:bg-stone-100 dark:hover:bg-stone-850/60 transition cursor-pointer text-left"
             >
               <div className="flex items-center gap-2.5">
                 <Sliders className="w-4 h-4 text-amber-500 animate-pulse" />
                 <div>
-                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Host Control Center</h3>
-                  <p className="text-[10px] text-stone-400 font-mono">Stream Overrides, Preset Channels & Playback Queue Schedulers</p>
+                  <h3 className="text-xs font-bold text-stone-900 dark:text-white uppercase tracking-wider">Host Control Center</h3>
+                  <p className="text-[10px] text-stone-500 dark:text-stone-400 font-mono">Stream Overrides, Preset Channels & Playback Queue Schedulers</p>
                 </div>
               </div>
               <div>
                 {isHostToolsOpen ? (
-                  <ChevronUp className="w-4 h-4 text-stone-400 font-bold" />
+                  <ChevronUp className="w-4 h-4 text-stone-500 dark:text-stone-400 font-bold" />
                 ) : (
-                  <ChevronDown className="w-4 h-4 text-stone-400 font-bold" />
+                  <ChevronDown className="w-4 h-4 text-stone-500 dark:text-stone-400 font-bold" />
                 )}
               </div>
             </button>
@@ -1682,19 +2111,19 @@ export default function RoomPage() {
                   animate={{ height: "auto", opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.25 }}
-                  className="border-t border-stone-850 p-4 space-y-4 bg-stone-950/20"
+                  className="border-t border-stone-200 dark:border-stone-850 p-4 space-y-4 bg-stone-50/10 dark:bg-stone-950/20"
                 >
                   {/* URL / input errors wrapper */}
                   {urlError && (
-                    <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-450 font-semibold animate-pulse flex items-center gap-2">
-                      <ShieldAlert className="w-4 h-4 shrink-0 text-rose-500" />
+                    <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-600 dark:text-rose-450 font-semibold animate-pulse flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 shrink-0 text-rose-550" />
                       <span>{urlError}</span>
                     </div>
                   )}
 
                   {/* Direct Load override */}
                   <div className="space-y-2">
-                    <h4 className="text-[10px] font-bold text-amber-400 uppercase font-mono tracking-widest flex items-center gap-1">
+                    <h4 className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase font-mono tracking-widest flex items-center gap-1">
                       <span>● Quick Stream override</span>
                     </h4>
                     <form 
@@ -1714,7 +2143,7 @@ export default function RoomPage() {
                         placeholder="Paste immediate direct stream URL or YouTube link..."
                         value={customUrlInput}
                         onChange={(e) => setCustomUrlInput(e.target.value)}
-                        className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                        className="flex-1 bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-900 dark:text-stone-200 placeholder-stone-450 dark:placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
                       />
                       <button
                         type="submit"
@@ -1731,7 +2160,7 @@ export default function RoomPage() {
                           key={idx}
                           type="button"
                           onClick={() => handleLoadMedia(p.url, p.type as any)}
-                          className="px-2.5 py-1.5 bg-stone-900 border border-stone-850 hover:border-stone-750 text-[9px] font-mono text-stone-400 hover:text-stone-200 rounded-lg transition cursor-pointer shrink-0"
+                          className="px-2.5 py-1.5 bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-850 hover:border-stone-300 dark:hover:border-stone-750 text-[9px] font-mono text-stone-650 dark:text-stone-400 hover:text-stone-950 dark:hover:text-stone-200 rounded-lg transition cursor-pointer shrink-0"
                         >
                           {p.name}
                         </button>
@@ -1739,9 +2168,44 @@ export default function RoomPage() {
                     </div>
                   </div>
 
+                  {/* YouTube Live preview container */}
+                  {isFetchingPreview && (
+                    <div className="flex items-center gap-2 text-xs font-mono text-amber-500 animate-pulse pt-2">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                      <span>Retrieving YouTube API metadata...</span>
+                    </div>
+                  )}
+
+                  {ytPreview && (
+                    <div className="border border-amber-500/15 bg-amber-500/[0.03] dark:bg-amber-500/[0.01] p-3 rounded-xl space-y-2.5 relative overflow-hidden">
+                      <div className="flex gap-3">
+                        <div className="relative w-24 h-16 rounded-lg overflow-hidden shrink-0 border border-amber-500/20 shadow">
+                          <img src={ytPreview.thumbnailUrl} alt="YT Preview Thumbnail" className="w-full h-full object-cover" />
+                          <span className="absolute bottom-1 right-1 bg-black/75 px-1 rounded text-[9px] font-mono text-stone-100">
+                            {formatTime(ytPreview.duration)}
+                          </span>
+                        </div>
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <h5 className="text-xs font-bold text-stone-900 dark:text-white truncate">{ytPreview.title}</h5>
+                          <div className="flex flex-col gap-0.5 text-[9px] font-mono text-stone-500 dark:text-stone-450 leading-none">
+                            <span>Channel: {ytPreview.channelName}</span>
+                            <span>Published: {ytPreview.publishedDate}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {!ytPreview.embeddable && (
+                        <div className="bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg p-2 text-[10px] flex items-center gap-2 leading-tight">
+                          <ShieldAlert className="w-3.5 h-3.5 text-rose-550 shrink-0" />
+                          <span>Embedding blocked. Video will fallback inside player frame.</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Queue playlist form */}
-                  <div className="space-y-2 pt-3 border-t border-stone-850/60">
-                    <h4 className="text-[10px] font-bold text-amber-400 uppercase font-mono tracking-widest">
+                  <div className="space-y-2 pt-3 border-t border-stone-200 dark:border-stone-850/60">
+                    <h4 className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase font-mono tracking-widest">
                       <span>● Append Scheduled Stream to Playlist Queue</span>
                     </h4>
                     <form onSubmit={handleAddMediaToQueue} className="space-y-2">
@@ -1751,7 +2215,7 @@ export default function RoomPage() {
                         placeholder="Paste direct audio/video streaming path or YouTube URL..."
                         value={queueUrlInput}
                         onChange={(e) => setQueueUrlInput(e.target.value)}
-                        className="w-full bg-stone-900 border border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                        className="w-full bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-900 dark:text-stone-200 placeholder-stone-450 dark:placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
                       />
                       <div className="flex gap-2">
                         <input
@@ -1759,7 +2223,7 @@ export default function RoomPage() {
                           placeholder="Enter Optional Track Custom Title..."
                           value={queueTitleInput}
                           onChange={(e) => setQueueTitleInput(e.target.value)}
-                          className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                          className="flex-1 bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-xs px-3 py-2 rounded-lg text-stone-900 dark:text-stone-200 placeholder-stone-450 dark:placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
                         />
                         <button
                           type="submit"
@@ -1770,6 +2234,67 @@ export default function RoomPage() {
                       </div>
                     </form>
                   </div>
+
+                  {/* Drag-and-drop file upload component */}
+                  <div className="space-y-2 pt-3 border-t border-stone-200 dark:border-stone-850/60">
+                    <h4 className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase font-mono tracking-widest">
+                      <span>● Quick File Sync (MP3 / MP4 Import)</span>
+                    </h4>
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={async (e) => {
+                        e.preventDefault();
+                        setIsDragging(false);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) handleFileImportMock(file);
+                      }}
+                      onClick={() => document.getElementById('drag-file-uploader')?.click()}
+                      className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition select-none flex flex-col items-center justify-center space-y-2 relative group mt-1.5 ${
+                        isDragging 
+                          ? 'border-amber-500 bg-amber-500/10 text-amber-650' 
+                          : 'border-stone-300 dark:border-stone-800 bg-stone-50 hover:bg-stone-100 dark:bg-stone-900 dark:hover:bg-stone-950 text-stone-500 dark:text-stone-400'
+                      }`}
+                    >
+                      <input
+                        id="drag-file-uploader"
+                        type="file"
+                        accept="audio/*,video/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleFileImportMock(file);
+                        }}
+                      />
+                      
+                      {uploadProgress !== null ? (
+                        <div className="w-full space-y-2">
+                          <Loader2 className="w-5 h-5 text-amber-500 animate-spin mx-auto animate-bounce" />
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-mono text-amber-500 font-bold uppercase tracking-wider">Syncing packets: {uploadProgress}%</p>
+                            <div className="w-full h-1 bg-stone-200 dark:bg-stone-800 rounded-full overflow-hidden">
+                              <div className="h-full bg-amber-500 transition-all duration-100" style={{ width: `${uploadProgress}%` }} />
+                            </div>
+                          </div>
+                        </div>
+                      ) : uploadedFileName ? (
+                        <div className="space-y-1 text-center">
+                          <Check className="w-5 h-5 text-emerald-500 mx-auto animate-bounce" />
+                          <p className="text-xs font-bold text-stone-805 dark:text-white">Import Successful!</p>
+                          <p className="text-[9px] font-mono text-emerald-500">{uploadedFileName}</p>
+                        </div>
+                      ) : (
+                        <>
+                          <Sparkles className="w-5 h-5 text-amber-500 animate-pulse" />
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-bold text-stone-700 dark:text-stone-300">Drag & Drop or Click to Upload</p>
+                            <p className="text-[10px] font-mono text-stone-450 dark:text-stone-500">Supports synchronized high-fidelity MP3 or MP4 streams</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1782,13 +2307,13 @@ export default function RoomPage() {
           <div className="space-y-6">
 
         {/* 3. PARTICIPANTS LIST */}
-        <div id="participants-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-4 space-y-3.5">
-          <div className="flex items-center justify-between pb-1.5 border-b border-stone-850/60">
+        <div id="participants-container" className="bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3.5 shadow-sm dark:shadow-none transition-colors duration-200">
+          <div className="flex items-center justify-between pb-1.5 border-b border-stone-200 dark:border-stone-850/60">
             <div className="flex items-center space-x-2">
               <Users className="w-4 h-4 text-amber-500" />
-              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Listeners ({members.length})</span>
+              <span className="text-xs font-mono font-bold text-stone-900 dark:text-stone-200 uppercase tracking-widest">Listeners ({members.length})</span>
             </div>
-            <span className="text-[10px] font-mono text-stone-550 uppercase tracking-wide">Sync Tribe</span>
+            <span className="text-[10px] font-mono text-stone-450 dark:text-stone-550 uppercase tracking-wide">Sync Tribe</span>
           </div>
 
           <div className="flex flex-wrap gap-2 py-1 items-center">
@@ -1819,8 +2344,8 @@ export default function RoomPage() {
                     exit={{ opacity: 0, scale: 0.9 }}
                     className={`group relative flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full border text-[11px] font-medium transition cursor-help select-none ${
                       memberIsMe 
-                        ? 'bg-amber-500/10 border-amber-500/30' 
-                        : 'bg-stone-900/60 border-stone-850 hover:border-stone-750'
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400' 
+                        : 'bg-stone-100 dark:bg-stone-900/60 border-stone-200 dark:border-stone-850 hover:border-stone-300 dark:hover:border-stone-750 text-stone-700 dark:text-stone-200'
                     }`}
                   >
                     {/* Avatar & status circle */}
@@ -1830,30 +2355,30 @@ export default function RoomPage() {
                         src={avatar} 
                         alt={nickname} 
                         className={`w-full h-full rounded-full object-cover border ${
-                          memberIsHost ? 'border-amber-500/60' : 'border-stone-800'
+                          memberIsHost ? 'border-amber-500/60' : 'border-stone-300 dark:border-stone-800'
                         }`}
                       />
-                      <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border-2 border-stone-950 ${statusDot}`} />
+                      <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border-2 border-white dark:border-stone-950 ${statusDot}`} />
                     </div>
 
                     {/* Nickname, Host badge */}
-                    <span className="max-w-[75px] truncate font-bold text-stone-200">
+                    <span className="max-w-[75px] truncate font-bold text-stone-800 dark:text-stone-200">
                       {nickname}
                     </span>
                     {memberIsHost && <Crown className="w-2.5 h-2.5 text-amber-500 shrink-0" />}
 
                     {/* Detailed Tooltip overlay on hover */}
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2.5 bg-stone-900 border border-stone-800 text-[10px] text-stone-300 rounded-xl shadow-2xl opacity-0 scale-95 pointer-events-none group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 z-50 space-y-1.5 whitespace-normal">
-                      <p className="font-extrabold text-white text-xs flex items-center gap-1">
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2.5 bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-[10px] text-stone-600 dark:text-stone-300 rounded-xl shadow-2xl opacity-0 scale-95 pointer-events-none group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 z-50 space-y-1.5 whitespace-normal">
+                      <p className="font-extrabold text-stone-900 dark:text-white text-xs flex items-center gap-1">
                         {nickname}
-                        {memberIsHost && <span className="text-[8px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-extrabold px-1.5 rounded uppercase leading-none">Host</span>}
-                        {memberIsMe && <span className="text-[8px] bg-rose-500/10 border border-rose-500/20 text-rose-450 font-mono font-extrabold px-1.5 rounded uppercase leading-none">You</span>}
+                        {memberIsHost && <span className="text-[8px] bg-amber-500/10 border border-amber-500/20 text-amber-500 dark:text-amber-400 font-mono font-extrabold px-1.5 rounded uppercase leading-none">Host</span>}
+                        {memberIsMe && <span className="text-[8px] bg-rose-500/10 border border-rose-500/20 text-rose-500 dark:text-rose-450 font-mono font-extrabold px-1.5 rounded uppercase leading-none">You</span>}
                       </p>
-                      <p className="text-stone-400 flex items-center gap-1 font-mono uppercase tracking-wider text-[8px]">
+                      <p className="text-stone-500 dark:text-stone-400 flex items-center gap-1 font-mono uppercase tracking-wider text-[8px]">
                         <span className={`w-1.5 h-1.5 rounded-full ${statusDot.split(' ')[0]}`}></span>
                         {memberIsHost ? 'Streaming state' : 'Listening state'}: {statusBadge}
                       </p>
-                      <p className="text-stone-500 font-mono text-[8px] border-t border-stone-800 pt-1">
+                      <p className="text-stone-450 dark:text-stone-550 font-mono text-[8px] border-t border-stone-100 dark:border-stone-800 pt-1">
                         Joined: {new Date(member.joined_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </p>
 
@@ -1896,11 +2421,11 @@ export default function RoomPage() {
             </AnimatePresence>
           </div>
               {/* 4. LIVE TEXT CHAT PANEL */}
-        <div id="live-chat-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-4 space-y-3 flex flex-col min-h-[224px]">
-          <div className="flex items-center justify-between pb-1.5 border-b border-stone-850/60 shrink-0">
+        <div id="live-chat-container" className="bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3 flex flex-col min-h-[224px] shadow-sm dark:shadow-none transition-colors duration-200">
+          <div className="flex items-center justify-between pb-1.5 border-b border-stone-200 dark:border-stone-850/60 shrink-0">
             <div className="flex items-center space-x-2">
               <MessageSquare className="w-4 h-4 text-amber-500" />
-              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Live Chat</span>
+              <span className="text-xs font-mono font-bold text-stone-900 dark:text-stone-200 uppercase tracking-widest">Live Chat</span>
             </div>
             {unreadCount > 0 && (
               <button
@@ -1924,11 +2449,11 @@ export default function RoomPage() {
           )}
 
           {/* messages list - Discord-like look */}
-          <div id="messages-list" className="flex-1 overflow-y-auto p-2 space-y-2 bg-stone-950/40 rounded-xl border border-stone-850/60 scrollbar-thin max-h-48 min-h-[110px]">
+          <div id="messages-list" className="flex-1 overflow-y-auto p-2 space-y-2 bg-stone-50 dark:bg-stone-950/40 rounded-xl border border-stone-200 dark:border-stone-850/60 scrollbar-thin max-h-48 min-h-[110px]">
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center p-3">
-                <MessageSquare className="w-5 h-5 text-stone-700 mb-1 shrink-0" />
-                <p className="text-xs text-stone-500 font-medium italic">No messages yet.</p>
+                <MessageSquare className="w-5 h-5 text-stone-300 dark:text-stone-700 mb-1 shrink-0" />
+                <p className="text-xs text-stone-400 dark:text-stone-500 font-medium italic">No messages yet.</p>
               </div>
             ) : (
               messages.map((msg) => {
@@ -1937,24 +2462,24 @@ export default function RoomPage() {
                 const avatar = matchedMember?.profiles?.avatar_url || `https://picsum.photos/seed/${encodeURIComponent(nickname)}/100`;
 
                 return (
-                  <div key={msg.id} className="flex items-start gap-2 py-0.5 text-xs hover:bg-stone-900/40 px-2 rounded transition-colors duration-150">
+                  <div key={msg.id} className="flex items-start gap-2 py-0.5 text-xs hover:bg-stone-100 dark:hover:bg-stone-900/40 px-2 rounded transition-colors duration-150">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img 
                       src={avatar} 
                       alt={nickname} 
-                      className="w-7 h-7 rounded-md object-cover border border-stone-850 mt-0.5 shrink-0" 
+                      className="w-7 h-7 rounded-md object-cover border border-stone-200 dark:border-stone-850 mt-0.5 shrink-0" 
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-1.5">
-                        <span className="font-extrabold text-stone-200 text-[11px] truncate">{nickname}</span>
+                        <span className="font-extrabold text-stone-800 dark:text-stone-200 text-[11px] truncate">{nickname}</span>
                         {matchedMember?.user_id === room.host_id && (
-                          <span className="text-[7px] bg-rose-500/10 border border-rose-500/20 text-rose-400 font-mono font-extrabold px-1 py-px rounded uppercase scale-90 shrink-0">HOST</span>
+                          <span className="text-[7px] bg-rose-500/10 border border-rose-500/20 text-rose-500 dark:text-rose-400 font-mono font-extrabold px-1 py-px rounded uppercase scale-90 shrink-0">HOST</span>
                         )}
-                        <span className="text-[8px] font-mono text-stone-500">
+                        <span className="text-[8px] font-mono text-stone-405 dark:text-stone-500">
                           {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <p className="text-stone-300 select-text leading-relaxed whitespace-pre-wrap mt-0.5 break-words text-[11px]">{msg.content}</p>
+                      <p className="text-stone-605 dark:text-stone-300 select-text leading-relaxed whitespace-pre-wrap mt-0.5 break-words text-[11px]">{msg.content}</p>
                     </div>
                   </div>
                 );
@@ -1966,8 +2491,8 @@ export default function RoomPage() {
           {/* Send block */}
           <div className="shrink-0">
             {currentMember?.is_muted ? (
-              <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-2 text-[10px] text-rose-450 leading-snug flex items-center gap-1.5 select-none">
-                <MicOff className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-2 text-[10px] text-rose-500 dark:text-rose-450 leading-snug flex items-center gap-1.5 select-none">
+                <MicOff className="w-3.5 h-3.5 text-rose-500 shrink-0" />
                 <span>Muted by the room host.</span>
               </div>
             ) : (
@@ -1987,12 +2512,12 @@ export default function RoomPage() {
                     setTypedMessage(e.target.value);
                     handleTypingKeydown();
                   }}
-                  className="flex-1 bg-stone-950 border border-stone-850 text-xs px-3 py-1.5 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition focus:border-amber-500"
+                  className="flex-1 bg-stone-100 dark:bg-stone-950 border border-stone-200 dark:border-stone-850 text-xs px-3 py-1.5 rounded-lg text-stone-900 dark:text-stone-200 placeholder-stone-400 dark:placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition focus:border-amber-500"
                 />
                 <button
                   type="submit"
                   disabled={!typedMessage.trim()}
-                  className="p-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-lg transition cursor-pointer disabled:bg-stone-900 disabled:text-stone-700 shrink-0 select-none flex items-center justify-center active:scale-95"
+                  className="p-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-lg transition cursor-pointer disabled:bg-stone-200 dark:disabled:bg-stone-910 disabled:text-stone-400 dark:disabled:text-stone-700 shrink-0 select-none flex items-center justify-center active:scale-95"
                 >
                   <Send className="w-3.5 h-3.5 text-stone-950 fill-stone-950" />
                 </button>
@@ -2002,23 +2527,23 @@ export default function RoomPage() {
         </div>    </div>
 
         {/* 5. MEDIA QUEUE CARD */}
-        <div id="media-queue-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-4 space-y-3 flex flex-col">
-          <div className="flex items-center justify-between pb-1.5 border-b border-stone-850/60 font-sans">
+        <div id="media-queue-container" className="bg-white dark:bg-stone-900/40 rounded-2xl border border-stone-200 dark:border-stone-850 p-4 space-y-3 flex flex-col shadow-sm dark:shadow-none transition-colors duration-200">
+          <div className="flex items-center justify-between pb-1.5 border-b border-stone-200 dark:border-stone-850/60 font-sans">
             <div className="flex items-center space-x-2">
               <ListMusic className="w-4 h-4 text-amber-500 animate-pulse" />
-              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Queue Playlist ({queue.length})</span>
+              <span className="text-xs font-mono font-bold text-stone-900 dark:text-stone-200 uppercase tracking-widest">Queue Playlist ({queue.length})</span>
             </div>
-            <span className="text-[10px] font-mono text-stone-500 uppercase tracking-wide">Sync Timeline</span>
+            <span className="text-[10px] font-mono text-stone-450 dark:text-stone-550 uppercase tracking-wide">Sync Timeline</span>
           </div>
 
           {/* Stack of media queue items */}
           <div className="space-y-1.5 overflow-y-auto max-h-56 pr-1 scrollbar-thin">
             {queue.length === 0 ? (
-              <div className="py-6 bg-stone-950/30 rounded-xl border border-stone-850/40 text-center space-y-1.5 flex flex-col items-center justify-center">
-                <ListMusic className="w-5 h-5 text-stone-700" />
+              <div className="py-6 bg-stone-50 dark:bg-stone-950/30 rounded-xl border border-stone-200 dark:border-stone-850/40 text-center space-y-1.5 flex flex-col items-center justify-center">
+                <ListMusic className="w-5 h-5 text-stone-300 dark:text-stone-700 font-mono" />
                 <div>
-                  <p className="text-xs text-stone-500 font-medium italic">Playback queue is empty.</p>
-                  <p className="text-[9px] text-stone-450 max-w-[190px] mx-auto mt-0.5 font-sans leading-normal">
+                  <p className="text-xs text-stone-400 dark:text-stone-550 font-medium italic">Playback queue is empty.</p>
+                  <p className="text-[9px] text-stone-500 dark:text-stone-450 max-w-[190px] mx-auto mt-0.5 font-sans leading-normal">
                     {currentIsHost 
                       ? 'Configure and schedule streams inside Host Tools control console.' 
                       : 'Lounge host configures the synchronization timeline.'}
@@ -2030,7 +2555,7 @@ export default function RoomPage() {
                 {queue.map((item, idx) => (
                   <div 
                     key={item.id}
-                    className={`flex items-center justify-between p-2 rounded-xl border gap-2.5 hover:bg-stone-900/10 transition duration-150 ${idx === 0 ? 'bg-amber-500/5 border-amber-500/15' : 'bg-stone-950/40 border-stone-850'}`}
+                    className={`flex items-center justify-between p-2 rounded-xl border gap-2.5 hover:bg-stone-100 dark:hover:bg-stone-900/10 transition duration-150 ${idx === 0 ? 'bg-amber-500/5 border-amber-500/15' : 'bg-stone-50 dark:bg-stone-950/40 border-stone-200 dark:border-stone-850'}`}
                   >
                     <div className="flex items-center space-x-2.5 min-w-0">
                       {/* Thumbnail wrapper */}
@@ -2038,7 +2563,7 @@ export default function RoomPage() {
                       <img 
                         src={item.thumbnail_url || `https://picsum.photos/seed/${encodeURIComponent(item.title || '')}/80/60`} 
                         alt={item.title || 'Queue Track'} 
-                        className="w-10 h-7 rounded object-cover border border-stone-800 shrink-0 select-none bg-stone-950"
+                        className="w-10 h-7 rounded object-cover border border-stone-205 dark:border-stone-800 shrink-0 select-none bg-stone-1 animate-fade-in"
                       />
                       
                       <div className="min-w-0">
