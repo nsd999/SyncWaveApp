@@ -287,11 +287,24 @@ export default function DashboardPage() {
     }
 
     try {
+      // Temporary logging for join diagnostics (BUG 1)
+      console.log('[SyncWave Join Debug] Entered code:', joinCodeInput);
+      console.log('[SyncWave Join Debug] Normalized code:', targetCode);
+      console.log('[SyncWave Join Debug] Column searched: slug');
+      console.log(`[SyncWave Join Debug] Supabase query: supabase.from('rooms').select('*').eq('slug', '${targetCode}').maybeSingle()`);
+
       const { data: roomMatch, error: selectError } = await supabase
         .from('rooms')
         .select('*')
         .eq('slug', targetCode)
         .maybeSingle();
+
+      console.log('[SyncWave Join Debug] Returned rows count:', roomMatch ? 1 : 0);
+      if (selectError) {
+        console.error('[SyncWave Join Debug] Supabase query error:', selectError.message);
+      }
+
+      writeLog('info', 'DEBUG JOIN', `Entered: "${joinCodeInput}", Normalized: "${targetCode}", Column searched: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${targetCode}', Returned count: ${roomMatch ? 1 : 0}`);
 
       if (selectError) {
         showToast("⚠️ SyncWave hit a temporary glitch.", "error");

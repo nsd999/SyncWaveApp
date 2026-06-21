@@ -258,12 +258,25 @@ export default function RoomPage() {
     if (!supabase || !roomCode) return;
 
     try {
+      // Temporary logging for join diagnostics (BUG 1)
+      console.log('[SyncWave Join Debug] Entered code:', roomCode);
+      console.log('[SyncWave Join Debug] Normalized code:', roomCode);
+      console.log('[SyncWave Join Debug] Column searched: slug');
+      console.log(`[SyncWave Join Debug] Supabase query: supabase.from('rooms').select('*').eq('slug', '${roomCode}').maybeSingle()`);
+
       // 1. Fetch Room definition
       const { data: roomData, error: roomError } = await supabase
         .from('rooms')
         .select('*')
         .eq('slug', roomCode)
         .maybeSingle();
+
+      console.log('[SyncWave Join Debug] Returned rows count:', roomData ? 1 : 0);
+      if (roomError) {
+        console.error('[SyncWave Join Debug] Supabase query error:', roomError.message);
+      }
+
+      writeLog('info', 'DEBUG JOIN', `Entered: "${roomCode}", Normalized: "${roomCode}", Column searched: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${roomCode}', Returned count: ${roomData ? 1 : 0}`);
 
       if (roomError) throw roomError;
 
