@@ -1,0 +1,6 @@
+{
+  "name": "SyncWave",
+  "description": "Secure, high-performance foundation for SyncWave featuring Supabase-powered authentication, session persistence, and custom user profile management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
