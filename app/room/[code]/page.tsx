@@ -14,6 +14,7 @@ import {
   MicOff, 
   Mic, 
   VolumeX, 
+  Volume2,
   LogOut, 
   Crown, 
   Send, 
@@ -30,9 +31,15 @@ import {
   Radio,
   Sliders,
   UserX,
-  X
+  X,
+  Play,
+  Pause,
+  Music,
+  Tv
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { PlaybackState } from '@/types/playback';
+import { PlaybackSyncService } from '@/lib/playback-service';
 
 interface ChatMessage {
   id: string;
@@ -42,6 +49,12 @@ interface ChatMessage {
   content: string;
   created_at: string;
 }
+
+const MEDIA_PRESETS = [
+  { name: 'Big Buck Bunny (Video)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', type: 'video' },
+  { name: 'Sintel Dream (Video)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4', type: 'video' },
+  { name: 'Chill Beats (Audio)', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3', type: 'audio' },
+];
 
 export const dynamic = 'force-dynamic';
 
@@ -79,6 +92,21 @@ export default function RoomPage() {
   const [copiedLink, setCopiedLink] = React.useState(false);
   const [chatScrolled, setChatScrolled] = React.useState(false);
   const chatEndRef = React.useRef<HTMLDivElement>(null);
+
+  // Playback sync states
+  const [playbackState, setPlaybackState] = React.useState<PlaybackState | null>(null);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
+  const [isPlaying, setIsPlaying] = React.useState(false);
+  const [mediaUrl, setMediaUrl] = React.useState('');
+  const [mediaType, setMediaType] = React.useState<'video' | 'audio'>('video');
+  const [customUrlInput, setCustomUrlInput] = React.useState('');
+  const [videoVolume, setVideoVolume] = React.useState(0.8);
+  const [isMuted, setIsMuted] = React.useState(false);
+  const [syncStatusText, setSyncStatusText] = React.useState('Initializing synchronization...');
+  
+  const playerRef = React.useRef<HTMLVideoElement | null>(null);
+  const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
 
   const supabaseConnected = isSupabaseConfigured();
 
@@ -444,6 +472,79 @@ export default function RoomPage() {
     }
   };
 
+  const currentIsHost = room ? room.host_id === user?.id : false;
+
+  const handleHostPlay = async () => {
+    if (!room || !currentIsHost || !playerRef.current) return;
+    const player = playerRef.current;
+    try {
+      await player.play();
+      setIsPlaying(true);
+      await PlaybackSyncService.play(room.id, player.currentTime, user?.id);
+    } catch (e) {
+      console.error('Failed to trigger play:', e);
+    }
+  };
+
+  const handleHostPause = async () => {
+    if (!room || !currentIsHost || !playerRef.current) return;
+    const player = playerRef.current;
+    player.pause();
+    setIsPlaying(false);
+    await PlaybackSyncService.pause(room.id, player.currentTime, user?.id);
+  };
+
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setCurrentTime(val);
+    if (!currentIsHost && playerRef.current) {
+      return;
+    }
+    if (playerRef.current) {
+      playerRef.current.currentTime = val;
+    }
+  };
+
+  const handleSliderRelease = async () => {
+    if (!room || !currentIsHost || !playerRef.current) return;
+    await PlaybackSyncService.seek(room.id, currentTime, user?.id);
+  };
+
+  const handleTimeUpdate = () => {
+    if (!playerRef.current) return;
+    if (isUpdatingFromRemote.current) return;
+    setCurrentTime(playerRef.current.currentTime);
+  };
+
+  const handleLoadedMetadata = () => {
+    if (!playerRef.current) return;
+    setDuration(playerRef.current.duration || 0);
+  };
+
+  const handleLoadMedia = async (url: string, type: 'video' | 'audio') => {
+    if (!room || !currentIsHost) return;
+    
+    let mediaDuration = 596; 
+    if (url.includes('Sintel')) mediaDuration = 653;
+    if (url.includes('Helix-Song-1')) mediaDuration = 372;
+    
+    writeLog('info', 'Sync Wave Engine', `Loading media: ${url}`);
+    
+    setMediaUrl(url);
+    setMediaType(type);
+    setCurrentTime(0);
+    setIsPlaying(false);
+    
+    await PlaybackSyncService.updateMedia(room.id, url, type, mediaDuration, user?.id);
+  };
+
+  const formatTime = (seconds: number): string => {
+    if (isNaN(seconds) || seconds === Infinity) return '00:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   // Setup room core connections and fetch metadata
   React.useEffect(() => {
     if (!supabaseConnected || !roomCode) {
@@ -459,6 +560,42 @@ export default function RoomPage() {
         setLoading(false);
         return;
       }
+
+      // Initialize room playback state and late join synchronization
+      const hostCheck = activeRoom.host_id === user?.id;
+      PlaybackSyncService.initializePlaybackState(activeRoom.id, hostCheck).then((state) => {
+        if (state) {
+          setPlaybackState(state);
+          setMediaUrl(state.media_url || '');
+          setMediaType((state.media_type as 'video' | 'audio') || 'video');
+          
+          // Late Join & Drift Recovery
+          let targetTime = state.current_time;
+          if (state.is_playing && state.last_sync_at) {
+            const elapsed = (Date.now() - new Date(state.last_sync_at).getTime()) / 1000;
+            targetTime = state.current_time + elapsed;
+            if (state.duration && targetTime > state.duration) {
+              targetTime = state.duration;
+            }
+          }
+          
+          setCurrentTime(targetTime);
+          setIsPlaying(state.is_playing);
+          
+          // Apply to player element lazily
+          setTimeout(() => {
+            const player = playerRef.current;
+            if (player) {
+              player.currentTime = targetTime;
+              if (state.is_playing) {
+                player.play().catch(e => console.log('[Playback Engine] Late join autoplay deferred:', e));
+              }
+            }
+          }, 300);
+          
+          setSyncStatusText('Real-time synchronization established.');
+        }
+      });
 
       // Check current user situation
       if (user) {
@@ -590,9 +727,65 @@ export default function RoomPage() {
           });
         }
       )
+      // Listen to room playback adjustments
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'playback_state', filter: `room_id=eq.${room.id}` },
+        (payload: any) => {
+          console.log('[Room Realtime Update] playback_state payload:', payload);
+          const newState = payload.new as PlaybackState;
+          if (newState) {
+            setPlaybackState(newState);
+
+            const player = playerRef.current;
+            if (player) {
+              isUpdatingFromRemote.current = true;
+
+              // Synchronize loaded URL and media type
+              setMediaUrl((prevUrl) => {
+                if (prevUrl !== newState.media_url) {
+                  return newState.media_url || '';
+                }
+                return prevUrl;
+              });
+
+              setMediaType((prevType) => {
+                const nextType = (newState.media_type as 'video' | 'audio') || 'video';
+                if (prevType !== nextType) {
+                  return nextType;
+                }
+                return prevType;
+              });
+
+              // Synchronize play/pause state
+              const isCurrentlyPlaying = !player.paused;
+              if (newState.is_playing && !isCurrentlyPlaying) {
+                player.play().catch(e => console.log('Autoplay deferred:', e));
+                setIsPlaying(true);
+              } else if (!newState.is_playing && isCurrentlyPlaying) {
+                player.pause();
+                setIsPlaying(false);
+              }
+
+              // Synchronize timeline seek
+              const lag = Math.abs(player.currentTime - newState.current_time);
+              if (lag > 2) {
+                player.currentTime = newState.current_time;
+                setCurrentTime(newState.current_time);
+              }
+
+              setSyncStatusText(`Synced • Last update ${new Date(newState.last_sync_at).toLocaleTimeString()}`);
+
+              setTimeout(() => {
+                isUpdatingFromRemote.current = false;
+              }, 150);
+            }
+          }
+        }
+      )
       .subscribe((status: any) => {
         if (status === 'SUBSCRIBED') {
-          writeLog('success', 'Lounge synced', `Supabase Realtime subscription status: CONNECTED to room_members & messages!`);
+          writeLog('success', 'Lounge synced', `Supabase Realtime subscription status: CONNECTED to room_members, messages, & playback_state!`);
         }
       });
 
@@ -1010,72 +1203,265 @@ export default function RoomPage() {
           {/* Aesthetic grid overlay */}
           <div className="absolute inset-0 bg-grid-pattern opacity-[0.02]"></div>
 
-          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center z-10 relative">
-            <div className="max-w-lg space-y-8 flex flex-col items-center">
-              
-              {/* Spinning vinyl visual stage indicating sync state */}
-              <div className="relative flex items-center justify-center">
-                
-                {/* Visual waves around circle */}
-                <div className="absolute -inset-10 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-600/10 rounded-full blur-2xl animate-pulse"></div>
-                <div className="absolute -inset-1 bg-gradient-to-r from-amber-500 to-amber-650 opacity-20 rounded-full blur animate-spin" style={{ animationDuration: '60s' }}></div>
-                
-                <div className="w-48 h-48 rounded-full bg-stone-900 border-4 border-stone-800 flex items-center justify-center relative shadow-2xl overflow-hidden group">
-                  
-                  {/* CD vinyl grooves */}
-                  <div className="absolute inset-1 rounded-full border border-stone-750/30 opacity-80"></div>
-                  <div className="absolute inset-3 rounded-full border border-stone-750/30 opacity-60"></div>
-                  <div className="absolute inset-6 rounded-full border border-stone-750/40 opacity-50"></div>
-                  <div className="absolute inset-10 rounded-full border border-stone-800/60"></div>
-
-                  <Disc className="w-24 h-24 text-stone-800/80 absolute transform group-hover:scale-105 transition duration-500 animate-spin" style={{ animationDuration: '10s' }} />
-
-                  {/* Dynamic cover mock art center circle */}
-                  <div className="w-14 h-14 rounded-full bg-stone-950 border-2 border-stone-850 flex items-center justify-center z-20">
-                    <div className="h-4 w-4 bg-amber-500 rounded-full animate-pulse flex items-center justify-center">
-                      <div className="h-1.5 w-1.5 bg-stone-950 rounded-full"></div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-2.5 bg-stone-900 border border-stone-800 text-amber-500 rounded-full absolute -bottom-3 -right-3 shadow-xl flex items-center justify-center">
-                  <Radio className="w-4 h-4 animate-bounce" />
-                </div>
-              </div>
-
-              {/* Status details */}
-              <div className="space-y-3">
-                <span className="text-[10px] bg-stone-900 text-stone-400 font-mono font-extrabold uppercase px-3 py-1.5 rounded-full border border-stone-800/60 tracking-wider">
-                  SyncWave Lounge: Active Standby Mode
-                </span>
-                <h2 className="text-xl font-bold text-white tracking-tight">Phase 1 Handshake Complete</h2>
-                <p className="text-xs text-stone-400 leading-relaxed font-sans max-w-sm">
-                  We are standardizing core room infrastructure. In compliance with Phase 2 constraints, media pipeline operations are on standby until future phases. Synchronized participant handshake is successful!
-                </p>
-              </div>
-
-              {/* Minimal metrics */}
-              <div className="grid grid-cols-3 gap-6 w-full text-stone-50 text-xs font-mono max-w-xs border-t border-stone-900 pt-6">
-                <div>
-                  <span className="text-stone-500 block uppercase text-[8px] mb-1">Latency</span>
-                  <span className="text-amber-500 font-semibold flex items-center justify-center gap-1">14ms</span>
-                </div>
-                <div>
-                  <span className="text-stone-500 block uppercase text-[8px] mb-1">Room Class</span>
-                  <span className="text-emerald-500 font-semibold">{room.is_private ? 'Private' : 'Public'}</span>
-                </div>
-                <div>
-                  <span className="text-stone-500 block uppercase text-[8px] mb-1">Occupants</span>
-                  <span className="text-stone-200 font-semibold">{members.length} count</span>
-                </div>
-              </div>
-
+          {/* Top header status bar */}
+          <div className="px-5 py-2.5 bg-stone-900/40 border-b border-stone-800/40 flex items-center justify-between text-[11px] font-mono text-stone-400 z-10 shrink-0 select-none">
+            <div className="flex items-center space-x-2">
+              <span className={`h-2 w-2 rounded-full ${syncStatusText.includes('Synced') ? 'bg-amber-500 animate-pulse' : 'bg-amber-600'}`}></span>
+              <span className="font-semibold text-stone-300">MEDIA PIPELINE</span>
+              <span className="text-stone-550 border border-stone-850 px-1 py-0 rounded text-[9px]">UTC CLUSTER</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <span>Class: {room.is_private ? 'Secure Space' : 'Public Lobby'}</span>
+              <span>•</span>
+              <span className="text-amber-500 font-bold">{mediaType.toUpperCase()} Stream</span>
             </div>
           </div>
 
-          {/* Active occupant feedback label */}
-          <div className="p-4 bg-stone-900/10 border-t border-stone-900 text-center font-mono text-[9px] text-stone-500 select-none z-10 shrink-0">
-            Room Code: {room.slug} • Unique Identifier: {room.id}
+          {/* Core Player Stage */}
+          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center z-10 relative overflow-hidden bg-stone-950/80">
+            {mediaUrl ? (
+              <div className="w-full h-full max-w-4xl flex flex-col items-center justify-center space-y-4">
+                {/* HTML5 video preview / player */}
+                <div className="relative w-full aspect-video md:max-h-[50vh] flex items-center justify-center bg-black/90 rounded-2xl border border-stone-800/80 overflow-hidden shadow-2xl">
+                  {mediaType === 'video' ? (
+                    <video
+                      id="wave-video-player"
+                      ref={playerRef}
+                      src={mediaUrl}
+                      onTimeUpdate={handleTimeUpdate}
+                      onLoadedMetadata={handleLoadedMetadata}
+                      playsInline
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center p-8 space-y-6">
+                      <video
+                        id="wave-audio-video-element"
+                        ref={playerRef}
+                        src={mediaUrl}
+                        onTimeUpdate={handleTimeUpdate}
+                        onLoadedMetadata={handleLoadedMetadata}
+                        playsInline
+                        className="hidden"
+                      />
+                      
+                      {/* Spinning vinyl visual stage indicating sync state */}
+                      <div className="relative flex items-center justify-center">
+                        {/* Visual waves around circle */}
+                        <div className="absolute -inset-10 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-600/10 rounded-full blur-2xl animate-pulse"></div>
+                        <div 
+                          className="absolute -inset-1.5 bg-gradient-to-r from-amber-500 to-amber-650 opacity-20 rounded-full blur animate-spin" 
+                          style={{ animationDuration: isPlaying ? '15s' : '0s' }}
+                        ></div>
+                        
+                        <div className="w-40 h-40 rounded-full bg-stone-900 border-4 border-stone-800 flex items-center justify-center relative shadow-2xl overflow-hidden group">
+                          {/* CD vinyl grooves */}
+                          <div className="absolute inset-1 rounded-full border border-stone-750/30 opacity-80"></div>
+                          <div className="absolute inset-3 rounded-full border border-stone-750/30 opacity-60"></div>
+                          <div className="absolute inset-6 rounded-full border border-stone-750/40 opacity-50"></div>
+                          <div className="absolute inset-10 rounded-full border border-stone-800/60"></div>
+
+                          <Disc 
+                            className="w-20 h-20 text-stone-800/80 absolute transform group-hover:scale-105 transition duration-500 animate-spin" 
+                            style={{ animationDuration: isPlaying ? '5s' : '0s' }} 
+                          />
+
+                          {/* Dynamic cover mock art center circle */}
+                          <div className="w-12 h-12 rounded-full bg-stone-950 border-2 border-stone-850 flex items-center justify-center z-20">
+                            <div className={`h-3 w-3 rounded-full flex items-center justify-center ${isPlaying ? 'bg-amber-500 animate-ping' : 'bg-stone-700'}`}>
+                              <div className="h-1.5 w-1.5 bg-stone-950 rounded-full"></div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-2 bg-stone-900 border border-stone-850 text-amber-500 rounded-full absolute -bottom-2 -right-2 shadow-lg flex items-center justify-center">
+                          <Music className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                      
+                      <div className="text-center space-y-1">
+                        <p className="text-xs font-mono text-amber-500 uppercase tracking-widest font-bold">AUDIO BROADCAST</p>
+                        <p className="text-sm font-semibold text-stone-200 truncate max-w-sm px-4">
+                          {mediaUrl.substring(mediaUrl.lastIndexOf('/') + 1)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom elegant status play button overlay if needed */}
+                </div>
+                
+                {/* Media description title */}
+                <span className="text-[10px] font-mono text-stone-500 truncate max-w-lg">
+                  Loaded URL: {mediaUrl}
+                </span>
+              </div>
+            ) : (
+              <div className="max-w-md space-y-6 flex flex-col items-center">
+                <div className="w-16 h-16 bg-stone-900 border border-stone-800 text-stone-500 rounded-2xl flex items-center justify-center shadow-xl">
+                  <Tv className="w-8 h-8 opacity-70" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-sm font-bold text-stone-200 tracking-wide uppercase font-mono">STANDBY: Empty Play Queue</h3>
+                  <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
+                    {isHost 
+                      ? "Paste a media URL stream below or select an instantaneous preset to initiate synchronization." 
+                      : "The host has not launched a streams source yet. Awaiting media loop initiations..."}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Real-time Custom Media Controls bar */}
+          <div className="p-4 bg-stone-900 border-t border-stone-800/80 flex flex-col gap-3 shrink-0 z-20">
+            {/* Timeline track and timers */}
+            <div className="flex items-center space-x-3 text-[10px] text-stone-400 font-mono">
+              <span className="w-10 text-right">{formatTime(currentTime)}</span>
+              
+              <input
+                id="playback-timeline-range"
+                type="range"
+                min={0}
+                max={duration || 100}
+                step={0.1}
+                value={currentTime}
+                disabled={!isHost}
+                onChange={handleSliderChange}
+                onMouseUp={handleSliderRelease}
+                onTouchEnd={handleSliderRelease}
+                className="flex-1 accent-amber-500 h-1 bg-stone-800 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+              />
+              
+              <span className="w-10 text-left">{formatTime(duration)}</span>
+            </div>
+
+            {/* Custom Control Buttons and load field */}
+            <div className="flex items-center justify-between">
+              {/* Play / pause controls */}
+              <div className="flex items-center space-x-3">
+                {isHost ? (
+                  isPlaying ? (
+                    <button
+                      onClick={handleHostPause}
+                      id="host-pause-btn"
+                      className="p-2 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-lg transition active:scale-95 cursor-pointer flex items-center justify-center font-bold"
+                      title="Pause Stream"
+                    >
+                      <Pause className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleHostPlay}
+                      id="host-play-btn"
+                      className="p-2 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-lg transition active:scale-95 cursor-pointer flex items-center justify-center font-bold"
+                      title="Play Stream"
+                    >
+                      <Play className="w-4 h-4" />
+                    </button>
+                  )
+                ) : (
+                  <div className="flex items-center space-x-1.5 bg-stone-950/80 border border-stone-850 px-2.5 py-1.5 rounded-lg text-[9px] uppercase font-mono tracking-wider text-stone-450">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-ping"></span>
+                    <span>Host Syncing</span>
+                  </div>
+                )}
+
+                {/* Info status badge */}
+                <span className="text-[10px] font-mono text-stone-450 leading-none">
+                  {syncStatusText}
+                </span>
+              </div>
+
+              {/* Volume sliders and muted tags */}
+              <div className="flex items-center space-x-2 text-xs text-stone-400">
+                <button
+                  onClick={() => {
+                    const nextMute = !isMuted;
+                    setIsMuted(nextMute);
+                    if (playerRef.current) {
+                      playerRef.current.muted = nextMute;
+                    }
+                  }}
+                  id="mute-unmute-btn"
+                  className="p-1.5 hover:bg-stone-850 rounded-lg cursor-pointer transition"
+                >
+                  {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500" /> : <Volume2 className="w-3.5 h-3.5 text-stone-300" />}
+                </button>
+                <input
+                  id="volume-slider-range"
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={videoVolume}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setVideoVolume(v);
+                    if (playerRef.current) {
+                      playerRef.current.volume = v;
+                      playerRef.current.muted = false;
+                    }
+                    setIsMuted(false);
+                  }}
+                  className="w-14 accent-stone-300 h-1 bg-stone-850 rounded appearance-none cursor-pointer"
+                />
+              </div>
+            </div>
+            
+            {/* Host Load Source field: Only visible if isHost */}
+            {isHost && (
+              <div className="pt-2 border-t border-stone-850/80 flex flex-col gap-1.5">
+                <div className="flex items-center justify-between text-[9px] text-stone-450 font-mono select-none">
+                  <span>HOST CONSOLE: STREAM LOAD ENGINE</span>
+                  <span className="text-amber-500 font-bold uppercase">Authorized Manager</span>
+                </div>
+                
+                {/* Form to submit custom url */}
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!customUrlInput.trim()) return;
+                    const val = customUrlInput.trim();
+                    const isAudio = val.endsWith('.mp3') || val.includes('Helix') || val.includes('audio');
+                    handleLoadMedia(val, isAudio ? 'audio' : 'video');
+                    setCustomUrlInput('');
+                  }}
+                  className="flex items-center space-x-2"
+                >
+                  <input
+                    id="preset-url-input"
+                    type="text"
+                    placeholder="Enter absolute audio or video URL stream..."
+                    value={customUrlInput}
+                    onChange={(e) => setCustomUrlInput(e.target.value)}
+                    className="flex-1 bg-stone-950/90 text-xs text-stone-300 px-3 py-2 rounded-lg border border-stone-850 focus:outline-none focus:ring-1 focus:ring-amber-500 placeholder-stone-650"
+                  />
+                  <button
+                    type="submit"
+                    id="submit-stream-btn"
+                    className="bg-stone-850 hover:bg-stone-800 text-stone-200 text-xs px-3.5 py-2 rounded-lg border border-stone-800 transition font-mono uppercase tracking-wider cursor-pointer"
+                  >
+                    LOAD
+                  </button>
+                </form>
+
+                {/* Quick presets selections */}
+                <div className="flex items-center space-x-2 overflow-x-auto py-1 scrollbar-none select-none">
+                  {MEDIA_PRESETS.map((p, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      id={`media-preset-${idx}`}
+                      onClick={() => handleLoadMedia(p.url, p.type as any)}
+                      className="px-2.5 py-1 bg-stone-950 border border-stone-850 hover:border-stone-750 rounded text-[9px] font-mono text-stone-500 hover:text-stone-300 active:scale-95 transition cursor-pointer shrink-0"
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
         </main>
