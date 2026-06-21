@@ -215,26 +215,26 @@ export default function Home() {
 
     try {
       // Temporary logging for join diagnostics (BUG 1)
-      console.log('[SyncWave Join Debug] Entered code:', joinCode);
-      console.log('[SyncWave Join Debug] Normalized code:', formattedCode);
-      console.log('[SyncWave Join Debug] Column searched: slug');
-      console.log(`[SyncWave Join Debug] Supabase query: supabase.from('rooms').select('*').eq('slug', '${formattedCode}').maybeSingle()`);
+      console.log('Entered code:', joinCode);
+      console.log('Normalized code:', formattedCode);
+      console.log('Column searched:', 'slug');
+      console.log('Supabase query:', `supabase.from("rooms").select("*").eq("slug", "${formattedCode}").single()`);
 
-      // 1. Verify if room exists in active database registries
+      // 1. Verify if room exists in active database registries using the exact requested query pattern
       const { data: roomMatch, error: selectError } = await supabase
-        .from('rooms')
-        .select('*')
-        .eq('slug', formattedCode)
-        .maybeSingle();
+        .from("rooms")
+        .select("*")
+        .eq("slug", formattedCode)
+        .single();
 
-      console.log('[SyncWave Join Debug] Returned rows count:', roomMatch ? 1 : 0);
-      if (selectError) {
+      console.log('Returned rows count:', roomMatch ? 1 : 0);
+      if (selectError && selectError.code !== 'PGRST116') {
         console.error('[SyncWave Join Debug] Supabase query error:', selectError.message);
       }
 
       writeLog('info', 'DEBUG JOIN', `Entered: "${joinCode}", Normalized: "${formattedCode}", Column searched: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${formattedCode}', Returned count: ${roomMatch ? 1 : 0}`);
 
-      if (selectError) {
+      if (selectError && selectError.code !== 'PGRST116') {
         showToast("⚠️ SyncWave hit a temporary glitch.", "error");
         throw selectError;
       }

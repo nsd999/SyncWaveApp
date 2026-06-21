@@ -231,10 +231,17 @@ export default function RoomPage() {
   const getStoredGuestSession = React.useCallback(() => {
     if (typeof window === 'undefined') return null;
     const data = localStorage.getItem(`syncwave-guest-${roomCode}`);
+    console.log('[SyncWave Session Debug] getStoredGuestSession read attempt:', {
+      key: `syncwave-guest-${roomCode}`,
+      exists: !!data
+    });
     if (data) {
       try {
-        return JSON.parse(data);
-      } catch (e) {
+        const parsed = JSON.parse(data);
+        console.log('[SyncWave Session Debug] getStoredGuestSession parse success:', parsed);
+        return parsed;
+      } catch (e: any) {
+        console.error('[SyncWave Session Debug] getStoredGuestSession JSON parse error:', e.message);
         return null;
       }
     }
@@ -244,39 +251,84 @@ export default function RoomPage() {
   // Set stored guest session (client-safe)
   const setStoredGuestSession = React.useCallback((guestId: string, name: string, sessionId: string) => {
     if (typeof window === 'undefined') return;
-    localStorage.setItem(`syncwave-guest-${roomCode}`, JSON.stringify({ guestId, displayName: name, sessionId }));
+    const payload = { guestId, displayName: name, sessionId };
+    console.log('[SyncWave Session Debug] setStoredGuestSession write:', {
+      key: `syncwave-guest-${roomCode}`,
+      payload
+    });
+    localStorage.setItem(`syncwave-guest-${roomCode}`, JSON.stringify(payload));
   }, [roomCode]);
 
   // Remove guest credentials (client-safe)
   const clearStoredGuestSession = React.useCallback(() => {
     if (typeof window === 'undefined') return;
+    console.log('[SyncWave Session Debug] clearStoredGuestSession clear-out invoked:', {
+      key: `syncwave-guest-${roomCode}`
+    });
     localStorage.removeItem(`syncwave-guest-${roomCode}`);
   }, [roomCode]);
 
   const fetchRoomDetails = React.useCallback(async () => {
     const supabase = getSupabase() as any;
-    if (!supabase || !roomCode) return;
+    if (!supabase || !roomCode) {
+      console.warn('[SyncWave Join Debug] Supabase client or roomCode missing on fetchRoomDetails:', { hasSupabase: !!supabase, roomCode });
+      return;
+    }
 
     try {
-      // Temporary logging for join diagnostics (BUG 1)
-      console.log('[SyncWave Join Debug] Entered code:', roomCode);
-      console.log('[SyncWave Join Debug] Normalized code:', roomCode);
-      console.log('[SyncWave Join Debug] Column searched: slug');
-      console.log(`[SyncWave Join Debug] Supabase query: supabase.from('rooms').select('*').eq('slug', '${roomCode}').maybeSingle()`);
+      // Highly granular logging for room join diagnostics
+      console.log('Entered code:', roomCode);
+      console.log('Normalized code:', roomCode.toUpperCase());
+      console.log('Column searched:', 'slug');
+      console.log('Supabase query:', `supabase.from("rooms").select("*").eq("slug", "${roomCode}").single()`);
 
-      // 1. Fetch Room definition
-      const { data: roomData, error: roomError } = await supabase
-        .from('rooms')
-        .select('*')
-        .eq('slug', roomCode)
-        .maybeSingle();
+      // 1. Fetch Room definition using exact single() pattern as expected
+      let { data: roomData, error: roomError } = await supabase
+        .from("rooms")
+        .select("*")
+        .eq("slug", roomCode)
+        .single();
 
-      console.log('[SyncWave Join Debug] Returned rows count:', roomData ? 1 : 0);
-      if (roomError) {
-        console.error('[SyncWave Join Debug] Supabase query error:', roomError.message);
+      // Handle no-rows return from .single() (Supabase returns error PGRST116)
+      if (roomError && roomError.code === 'PGRST116') {
+        roomData = null;
+        roomError = null;
       }
 
-      writeLog('info', 'DEBUG JOIN', `Entered: "${roomCode}", Normalized: "${roomCode}", Column searched: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${roomCode}', Returned count: ${roomData ? 1 : 0}`);
+      console.log('Returned rows count:', roomData ? 1 : 0);
+      console.log('[SyncWave Join Debug] Raw Supabase Return Values:', {
+        hasData: !!roomData,
+        dataFields: roomData ? Object.keys(roomData) : null,
+        roomDataValues: roomData ? {
+          id: roomData.id,
+          name: roomData.name,
+          slug: roomData.slug,
+          host_id: roomData.host_id,
+          is_private: roomData.is_private,
+          created_at: roomData.created_at
+        } : null,
+        hasError: !!roomError,
+        errorDetails: roomError ? {
+          code: roomError.code,
+          message: roomError.message,
+          details: roomError.details,
+          hint: roomError.hint
+        } : null
+      });
+
+      // Checking potential RLS blocks or permission checks
+      if (roomError) {
+        console.error('[SyncWave Join Debug] RLS or query failure detected in database selection:', roomError.message);
+        if (roomError.code === '42501') {
+          console.error('[SyncWave Join Debug] RLS POLICY WARNING: Code 42501 indicates Row-Level Security permission violation. The database is actively shielding these rows from public discovery!');
+        }
+      } else if (!roomData) {
+        console.warn('[SyncWave Join Debug] Empty Response: Row Resolution returned Null. Either the rooms table has no entry with slug matching:', roomCode, 'or an RLS SELECT policy is actively filtering it.');
+      } else {
+        console.log('[SyncWave Join Debug] Room found successfully:', roomData.name, `(${roomData.id})`);
+      }
+
+      writeLog('info', 'DEBUG JOIN', `Lounge resolution checklist - Entered: "${roomCode}", Column matching: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${roomCode}', Status: ${roomError ? 'ERROR' : (roomData ? 'FOUND' : 'NULL')}, Row ID: ${roomData?.id || 'N/A'}`);
 
       if (roomError) throw roomError;
 
@@ -290,15 +342,26 @@ export default function RoomPage() {
       setRoom(rAny);
 
       // 2. Fetch Active Members in this room
+      console.log('[SyncWave Join Debug] Querying active room members for Room ID:', rAny.id);
       const { data: membersData, error: membersError } = await supabase
         .from('room_members')
         .select('*, profiles(display_name, username, avatar_url)')
         .eq('room_id', rAny.id);
 
-      if (membersError) throw membersError;
+      if (membersError) {
+        console.error('[SyncWave Join Debug] Member query error (Potentially RLS filter mismatch):', {
+          code: membersError.code,
+          message: membersError.message,
+          details: membersError.details,
+          hint: membersError.hint
+        });
+        throw membersError;
+      }
+      console.log('[SyncWave Join Debug] Members recovered:', membersData?.length || 0, 'occupants registered in active room.');
       setMembers(membersData || []);
 
       // 3. Fetch recent messages logs
+      console.log('[SyncWave Join Debug] Reading recent chat messages for Room ID:', rAny.id);
       const { data: messagesData, error: messagesError } = await supabase
         .from('messages')
         .select('*')
@@ -306,8 +369,17 @@ export default function RoomPage() {
         .order('created_at', { ascending: true })
         .limit(100);
 
-      if (messagesError) throw messagesError;
-      
+      if (messagesError) {
+        console.error('[SyncWave Join Debug] Chat logs loading error (Potentially RLS block):', {
+          code: messagesError.code,
+          message: messagesError.message,
+          details: messagesError.details,
+          hint: messagesError.hint
+        });
+        throw messagesError;
+      }
+      console.log('[SyncWave Join Debug] Messages retrieved count:', messagesData?.length || 0);
+
       // Adapt structure to local models
       const mappedMessages: ChatMessage[] = ((messagesData as any[]) || []).map((m: any) => {
         // Resolve sender display name from members list
@@ -328,7 +400,7 @@ export default function RoomPage() {
 
       return roomData;
     } catch (e: any) {
-      console.error('[Room Page] Error loading room metadata:', e.message);
+      console.error('[SyncWave Join Debug] Error during fetchRoomDetails transaction execution sequence:', e.message);
       writeLog('error', 'Room connection', `Could not initialize room schema: ${e.message}`);
       setInitError(e.message || 'Error occurred while loading room data.');
       setLoading(false);
@@ -339,15 +411,21 @@ export default function RoomPage() {
   const joinRoomAsRegisteredUser = React.useCallback(async (roomId: string, userId: string, userEmail: string) => {
     const supabase = getSupabase() as any;
     if (!supabase) {
+      console.error('[SyncWave Join Debug] Supabase client absent inside joinRoomAsRegisteredUser.');
       setLoading(false);
       return;
     }
 
     try {
+      console.log('[SyncWave Join Debug] joinRoomAsRegisteredUser Initiated:', { roomId, userId, userEmail });
+      
       // Make sure registered user has their profile built
+      console.log('[SyncWave Join Debug] Resolving user profile...');
       const userProfile = await getOrCreateProfile(userId, userEmail);
+      console.log('[SyncWave Join Debug] User Profile Resolved:', userProfile);
 
       // Prevent duplicate membership entries by querying existing
+      console.log('[SyncWave Join Debug] Checking existing membership for User ID:', userId, 'and Room ID:', roomId);
       const { data: existing, error: findError } = await supabase
         .from('room_members')
         .select('*')
@@ -355,12 +433,28 @@ export default function RoomPage() {
         .eq('user_id', userId)
         .maybeSingle();
 
-      if (findError) throw findError;
+      if (findError) {
+        console.error('[SyncWave Join Debug] Existing membership query failed:', {
+          code: findError.code,
+          message: findError.message,
+          details: findError.details,
+          hint: findError.hint
+        });
+        throw findError;
+      }
 
       const extAny = existing as any;
+      console.log('[SyncWave Join Debug] Existing membership check results:', {
+        found: !!extAny,
+        memberId: extAny?.id,
+        isBanned: extAny?.is_banned,
+        role: extAny?.role
+      });
+
       if (extAny) {
         // Check if banned
         if (extAny.is_banned) {
+          console.warn('[SyncWave Join Debug] Registered user is blocked from entering: current profile reflects active banned state.');
           setIsBanned(true);
           return;
         }
@@ -369,6 +463,7 @@ export default function RoomPage() {
         writeLog('info', 'Lounge synced', `Rejoining session lounge as registered user: @${userProfile.username}`);
       } else {
         // Create new membership entry
+        console.log('[SyncWave Join Debug] Registering new member entry in room_members table for profile:', userProfile.display_name);
         const { data: joinedRow, error: joinError } = await supabase
           .from('room_members')
           .insert({
@@ -379,12 +474,22 @@ export default function RoomPage() {
           .select()
           .single();
 
-        if (joinError) throw joinError;
+        if (joinError) {
+          console.error('[SyncWave Join Debug] Row registration failed on insert. This may signify an insert RLS policy restriction:', {
+            code: joinError.code,
+            message: joinError.message,
+            details: joinError.details,
+            hint: joinError.hint
+          });
+          throw joinError;
+        }
+        
+        console.log('[SyncWave Join Debug] Membership created successfully:', joinedRow);
         setCurrentMember(joinedRow);
         writeLog('success', 'Lounge synced', `Registered user @${userProfile.username} entered the room session.`);
       }
     } catch (err: any) {
-      console.error('Failed to link registered user membership:', err);
+      console.error('[SyncWave Join Debug] Error inside joinRoomAsRegisteredUser processing track:', err);
       writeLog('error', 'Lounge synced', `Failed to join lounge matching registration: ${err.message}`);
       setInitError(err.message || 'Error occurred while joining room session.');
     } finally {
@@ -394,31 +499,49 @@ export default function RoomPage() {
 
   const handleGuestJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!room || guestSubmitting || !guestNameInput.trim()) return;
+    if (!room || guestSubmitting || !guestNameInput.trim()) {
+      console.warn('[SyncWave Join Debug] handleGuestJoinSubmit call bypassed:', { hasRoom: !!room, guestSubmitting, nameEmpty: !guestNameInput.trim() });
+      return;
+    }
 
     setGuestSubmitting(true);
     setGuestError(null);
 
     const supabase = getSupabase() as any;
     if (!supabase) {
+      console.error('[SyncWave Join Debug] Supabase client absent inside handleGuestJoinSubmit.');
       setGuestSubmitting(false);
       return;
     }
 
     try {
-      const safeName = await getUniqueGuestName(room.id, guestNameInput.trim());
+      const trimmedName = guestNameInput.trim();
+      console.log('[SyncWave Join Debug] Guest login initiated with requested display name:', trimmedName);
+      
+      const safeName = await getUniqueGuestName(room.id, trimmedName);
+      console.log('[SyncWave Join Debug] Generated unique/sanitized guest name:', safeName);
       
       // Check if this IP or display name exists with a ban in this room members list
+      console.log('[SyncWave Join Debug] Executing ban precheck for guest name:', safeName);
       const { data: existingRecords, error: precheckError } = await supabase
         .from('room_members')
         .select('*')
         .eq('room_id', room.id)
         .eq('display_name', safeName);
 
-      if (precheckError) throw precheckError;
+      if (precheckError) {
+        console.error('[SyncWave Join Debug] Ban precheck query failed:', {
+          code: precheckError.code,
+          message: precheckError.message,
+          details: precheckError.details,
+          hint: precheckError.hint
+        });
+        throw precheckError;
+      }
 
       const banMatch = ((existingRecords as any[]) || []).find((v: any) => v.is_banned);
       if (banMatch) {
+         console.warn('[SyncWave Join Debug] Guest matches banned record identifier in database.', banMatch);
          setIsBanned(true);
          setShowJoinPrompt(false);
          setGuestSubmitting(false);
@@ -429,6 +552,7 @@ export default function RoomPage() {
       // Generate pristine guest unique identifiers
       const guestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
+      console.log('[SyncWave Join Debug] Inserting fresh guest row into room_members:', { roomId: room.id, guestId, safeName, sessionId });
 
       const { data: row, error: insertError } = await supabase
         .from('room_members')
@@ -441,13 +565,23 @@ export default function RoomPage() {
         .select()
         .single();
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error('[SyncWave Join Debug] Guest row insertion triggered exception. Make sure guest write policy on room_members table is fully allowed:', {
+          code: insertError.code,
+          message: insertError.message,
+          details: insertError.details,
+          hint: insertError.hint
+        });
+        throw insertError;
+      }
+
+      console.log('[SyncWave Join Debug] Guest registered successfully in room_members:', row);
 
       // Persist credentials locally for recovery on refresh
       setStoredGuestSession(guestId, safeName, sessionId);
       setCurrentMember(row);
       setShowJoinPrompt(false);
-      writeLog('success', 'Lounge synced', `Guest "${safeName}" joined synced session with temporary token id ${guestId.substring(0,6)}.`);
+      writeLog('success', 'Lounge synced', `Guest "${safeName}" joined synced session with temporary token id ${guestId.substring(0, 6)}.`);
       
       // Refresh list
       await fetchRoomDetails();
@@ -1507,10 +1641,12 @@ export default function RoomPage() {
       } else {
         // Guest user - attempt resolution of local persistence session to recover
         const stored = getStoredGuestSession();
+        console.log('[SyncWave Join Debug] Guest path triggered. Local recovery session found in storage:', stored);
         if (stored) {
           // Verify against existing database records for recovery
           const supabase = getSupabase() as any;
           if (supabase) {
+            console.log('[SyncWave Join Debug] Verifying stored guest session on room_members table. Room ID:', activeRoom.id, 'Guest ID:', stored.guestId);
             supabase
               .from('room_members')
               .select('*')
@@ -1520,15 +1656,40 @@ export default function RoomPage() {
               .then((res: any) => {
                 const row = res?.data;
                 const error = res?.error;
+                
+                console.log('[SyncWave Join Debug] Guest record query finished.', {
+                  hasRow: !!row,
+                  rowDetails: row ? {
+                    id: row.id,
+                    display_name: row.display_name,
+                    is_banned: row.is_banned,
+                    session_id: row.session_id
+                  } : null,
+                  hasError: !!error,
+                  errorDetails: error ? {
+                    code: error.code,
+                    message: error.message,
+                    details: error.details,
+                    hint: error.hint
+                  } : null
+                });
+
+                if (error) {
+                  console.error('[SyncWave Join Debug] Error querying guest member row. Likely RLS SELECT restriction on room_members table:', error.message);
+                }
+
                 if (error || !row) {
+                  console.warn('[SyncWave Join Debug] DB row missing or query errored during guest session validation. Forcing session reset and drawing registration form.');
                   // DB row is missing, force re-creation
                   clearStoredGuestSession();
                   setShowJoinPrompt(true);
                   setLoading(false);
                 } else if (row.is_banned) {
+                  console.warn('[SyncWave Join Debug] Recovered member row indicates that this guest is active BANNED. Raising block screen.');
                   setIsBanned(true);
                   setLoading(false);
                 } else {
+                  console.log('[SyncWave Join Debug] Guest session successfully matched and verified in database! Recovered display name:', row.display_name);
                   // Row recovered successfully!
                   setCurrentMember(row);
                   setLoading(false);
@@ -1536,9 +1697,11 @@ export default function RoomPage() {
                 }
               });
           } else {
+            console.error('[SyncWave Join Debug] Supabase client absent during guest session verification inside useEffect.');
             setLoading(false);
           }
         } else {
+          console.log('[SyncWave Join Debug] No local guest session found, displaying name registration form.');
           // No guest session found, trigger Join Panel immediately
           setShowJoinPrompt(true);
           setLoading(false);
@@ -1829,6 +1992,17 @@ export default function RoomPage() {
   }
 
   // Room Not Found State Screen
+  console.log("ROOM PAGE DEBUG", {
+    roomFound: !!room,
+    roomData: room,
+    authUser: user ? { id: user.id, email: user.email } : null,
+    guestSession: getStoredGuestSession(),
+    memberRecord: currentMember,
+    loading,
+    error: initError,
+    roomCode
+  });
+
   if (!room) {
     return (
       <div id="not-found-viewport" className="min-h-screen bg-stone-950 flex flex-col items-center justify-center p-6 text-stone-100 font-sans">

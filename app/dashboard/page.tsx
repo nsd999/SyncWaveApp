@@ -288,25 +288,25 @@ export default function DashboardPage() {
 
     try {
       // Temporary logging for join diagnostics (BUG 1)
-      console.log('[SyncWave Join Debug] Entered code:', joinCodeInput);
-      console.log('[SyncWave Join Debug] Normalized code:', targetCode);
-      console.log('[SyncWave Join Debug] Column searched: slug');
-      console.log(`[SyncWave Join Debug] Supabase query: supabase.from('rooms').select('*').eq('slug', '${targetCode}').maybeSingle()`);
+      console.log('Entered code:', joinCodeInput);
+      console.log('Normalized code:', targetCode);
+      console.log('Column searched:', 'slug');
+      console.log('Supabase query:', `supabase.from("rooms").select("*").eq("slug", "${targetCode}").single()`);
 
       const { data: roomMatch, error: selectError } = await supabase
-        .from('rooms')
-        .select('*')
-        .eq('slug', targetCode)
-        .maybeSingle();
+        .from("rooms")
+        .select("*")
+        .eq("slug", targetCode)
+        .single();
 
-      console.log('[SyncWave Join Debug] Returned rows count:', roomMatch ? 1 : 0);
-      if (selectError) {
+      console.log('Returned rows count:', roomMatch ? 1 : 0);
+      if (selectError && selectError.code !== 'PGRST116') {
         console.error('[SyncWave Join Debug] Supabase query error:', selectError.message);
       }
 
       writeLog('info', 'DEBUG JOIN', `Entered: "${joinCodeInput}", Normalized: "${targetCode}", Column searched: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${targetCode}', Returned count: ${roomMatch ? 1 : 0}`);
 
-      if (selectError) {
+      if (selectError && selectError.code !== 'PGRST116') {
         showToast("⚠️ SyncWave hit a temporary glitch.", "error");
         throw selectError;
       }
