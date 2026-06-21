@@ -144,7 +144,7 @@ export default function RoomPage() {
     setToasts((prev) => [...prev, { id, type, message }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 5500);
+    }, 5000);
   }, []);
 
   const [syncStatusText, setSyncStatusText] = React.useState('Initializing synchronization...');
@@ -2376,6 +2376,7 @@ export default function RoomPage() {
                     onClick={() => {
                       const nextMute = !isMuted;
                       setIsMuted(nextMute);
+                      localStorage.setItem('syncwave-muted', String(nextMute));
                       if (playerRef.current) {
                         playerRef.current.muted = nextMute;
                       }
@@ -2408,6 +2409,8 @@ export default function RoomPage() {
                       const v = parseFloat(e.target.value);
                       setVideoVolume(v);
                       setIsMuted(false);
+                      localStorage.setItem('syncwave-volume', String(v));
+                      localStorage.setItem('syncwave-muted', 'false');
                       if (playerRef.current) {
                         playerRef.current.volume = v;
                         playerRef.current.muted = false;
@@ -2591,15 +2594,20 @@ export default function RoomPage() {
                       <span>● Quick File Sync (MP3 / MP4 Import)</span>
                     </h4>
                     <div
-                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                      onDragLeave={() => setIsDragging(false)}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
                       onDrop={async (e) => {
                         e.preventDefault();
+                        e.stopPropagation();
                         setIsDragging(false);
                         const file = e.dataTransfer.files?.[0];
                         if (file) handleFileImportMock(file);
                       }}
-                      onClick={() => document.getElementById('drag-file-uploader')?.click()}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        document.getElementById('drag-file-uploader')?.click();
+                      }}
                       className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition select-none flex flex-col items-center justify-center space-y-2 relative group mt-1.5 ${
                         isDragging 
                           ? 'border-amber-500 bg-amber-500/10 text-amber-650' 
@@ -2611,6 +2619,7 @@ export default function RoomPage() {
                         type="file"
                         accept="audio/*,video/*"
                         className="hidden"
+                        onClick={(e) => e.stopPropagation()}
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) handleFileImportMock(file);
@@ -2969,19 +2978,19 @@ export default function RoomPage() {
       </div>
 
       {/* Floating Animated Toast Notifications (BUG 6) */}
-      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+      <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] flex flex-col gap-2 max-w-sm w-full px-4 pointer-events-none">
         <AnimatePresence>
           {toasts.map((t) => (
             <motion.div
               key={t.id}
-              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -10, scale: 0.95 }}
               className={`pointer-events-auto flex items-center justify-between p-3.5 rounded-xl border shadow-lg backdrop-blur-md ${
                 t.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' :
                 t.type === 'warning' ? 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400' :
-                t.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-605 dark:text-rose-400' :
-                'bg-white/90 dark:bg-stone-900/90 border-stone-200 dark:border-stone-800 text-stone-800 dark:text-stone-100'
+                t.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400' :
+                'bg-white/95 dark:bg-stone-900/95 border-stone-200 dark:border-stone-800 text-stone-800 dark:text-stone-100'
               }`}
             >
               <div className="flex items-center gap-2">

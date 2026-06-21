@@ -114,8 +114,8 @@ CREATE INDEX IF NOT EXISTS idx_rooms_host_id ON public.rooms(host_id);
 
 ALTER TABLE public.rooms ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow public read access to public rooms" 
-ON public.rooms FOR SELECT USING (NOT is_private);
+CREATE POLICY "Allow public read access to all rooms" 
+ON public.rooms FOR SELECT USING (true);
 
 CREATE POLICY "Allow users to manage rooms they host" 
 ON public.rooms FOR ALL TO authenticated USING (auth.uid() = host_id) WITH CHECK (auth.uid() = host_id);

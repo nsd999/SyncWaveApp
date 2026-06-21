@@ -81,6 +81,16 @@ export default function DashboardPage() {
   const [copiedCode, setCopiedCode] = React.useState<string | null>(null);
   const [copiedShare, setCopiedShare] = React.useState(false);
 
+  const [toasts, setToasts] = React.useState<any[]>([]);
+
+  const showToast = React.useCallback((message: string, type: 'success' | 'warning' | 'error' | 'info' = 'info') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  }, []);
+
   const supabaseConnected = React.useMemo(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -259,14 +269,19 @@ export default function DashboardPage() {
 
   const handleJoinByCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!joinCodeInput.trim() || joining || !supabaseConnected) return;
+    const targetCode = joinCodeInput.trim().toUpperCase();
+    if (!targetCode) {
+      showToast("🫠 Looks like this invite missed the vibe check.", "error");
+      return;
+    }
+    if (joining || !supabaseConnected) return;
 
     setJoining(true);
     setJoinError(null);
     
-    const targetCode = joinCodeInput.trim().toUpperCase();
     const supabase = getSupabase();
     if (!supabase) {
+      showToast("⚠️ SyncWave hit a temporary glitch.", "error");
       setJoining(false);
       return;
     }
@@ -278,10 +293,13 @@ export default function DashboardPage() {
         .eq('slug', targetCode)
         .maybeSingle();
 
-      if (selectError) throw selectError;
+      if (selectError) {
+        showToast("⚠️ SyncWave hit a temporary glitch.", "error");
+        throw selectError;
+      }
 
       if (!roomMatch) {
-         setJoinError('Room code does not exist. Check spelling and retry.');
+         showToast("👀 We couldn't find that lounge.\nDouble-check the code or ask your friend for a fresh invite.", "error");
          setJoining(false);
          return;
       }
@@ -294,14 +312,14 @@ export default function DashboardPage() {
         .maybeSingle();
 
       if ((bannedCheck as any)?.is_banned) {
-        setJoinError('You are banned from entering this room.');
+        showToast("You are banned from entering this room.", "error");
         setJoining(false);
         return;
       }
 
       router.push(`/room/${targetCode}`);
     } catch (err: any) {
-      setJoinError(err.message);
+      showToast("⚠️ SyncWave hit a temporary glitch.", "error");
     } finally {
       setJoining(false);
     }
@@ -1427,6 +1445,41 @@ export default function DashboardPage() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Floating Animated Toast Notifications (BUG 6) */}
+      <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] flex flex-col gap-2 max-w-sm w-full px-4 pointer-events-none">
+        <AnimatePresence>
+          {toasts.map((t) => (
+            <motion.div
+              key={t.id}
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              className={`pointer-events-auto flex items-center justify-between p-3.5 rounded-xl border shadow-lg backdrop-blur-md ${
+                t.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' :
+                t.type === 'warning' ? 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400' :
+                t.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400' :
+                'bg-white/95 dark:bg-stone-900/95 border-stone-200 dark:border-stone-800 text-stone-800 dark:text-stone-100'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {t.type === 'success' && <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+                {t.type === 'warning' && <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
+                {t.type === 'error' && <div className="h-1.5 w-1.5 rounded-full bg-rose-500" />}
+                {t.type === 'info' && <div className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
+                <span className="text-[11px] font-bold tracking-tight font-sans leading-tight whitespace-pre-wrap">{t.message}</span>
+              </div>
+              <button
+                onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+                className="p-1 hover:bg-stone-100 dark:hover:bg-stone-850 rounded-lg text-stone-500 hover:text-stone-900 dark:hover:text-stone-200 cursor-pointer transition ml-2 shrink-0"
+                title="Dismiss Alert"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
 
     </div>
   );
