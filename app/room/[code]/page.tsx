@@ -35,7 +35,13 @@ import {
   Play,
   Pause,
   Music,
-  Tv
+  Tv,
+  SkipForward,
+  ListMusic,
+  ArrowUp,
+  ArrowDown,
+  PlusCircle,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PlaybackState } from '@/types/playback';
@@ -104,6 +110,14 @@ export default function RoomPage() {
   const [videoVolume, setVideoVolume] = React.useState(0.8);
   const [isMuted, setIsMuted] = React.useState(false);
   const [syncStatusText, setSyncStatusText] = React.useState('Initializing synchronization...');
+
+  // Media Queue & Chat Interactions States
+  const [queue, setQueue] = React.useState<any[]>([]);
+  const [queueUrlInput, setQueueUrlInput] = React.useState('');
+  const [queueTitleInput, setQueueTitleInput] = React.useState('');
+  const [unreadCount, setUnreadCount] = React.useState(0);
+  const [typingUsers, setTypingUsers] = React.useState<string[]>([]);
+  const [isTyping, setIsTyping] = React.useState(false);
   
   const playerRef = React.useRef<HTMLVideoElement | null>(null);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
@@ -521,6 +535,206 @@ export default function RoomPage() {
     setDuration(playerRef.current.duration || 0);
   };
 
+  // HELPER FOR YOUTUBE ID DETECTION
+  const getYouTubeId = (url: string) => {
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
+  };
+
+  // QUEUE OPERATIONS
+  const handleAddMediaToQueue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!room || !queueUrlInput.trim()) return;
+
+    const url = queueUrlInput.trim();
+    let finalTitle = queueTitleInput.trim();
+    const isYt = url.includes('youtube.com') || url.includes('youtu.be') || url.includes('/embed/');
+    const isAudio = url.endsWith('.mp3') || url.includes('Helix') || url.includes('audio');
+    const computedType = isYt ? 'youtube' : (isAudio ? 'audio' : 'video');
+
+    if (!finalTitle) {
+      if (isYt) {
+        const ytId = getYouTubeId(url);
+        finalTitle = ytId ? `YouTube Sync Track (${ytId})` : 'YouTube Stream';
+      } else {
+        finalTitle = url.substring(url.lastIndexOf('/') + 1) || 'Custom Stream';
+      }
+    }
+
+    // Default duration metrics
+    let computedDuration = 180; // Default fallback (3 mins)
+    if (url.includes('BigBuckBunny')) computedDuration = 596;
+    if (url.includes('Sintel')) computedDuration = 653;
+    if (url.includes('Helix-Song-1')) computedDuration = 372;
+
+    const addedByName = currentMember?.profiles?.display_name || currentMember?.display_name || 'Host';
+    const addedByUserId = currentMember?.user_id || currentMember?.guest_id || null;
+
+    writeLog('info', 'Media Queue', `Adding tracking queue index reference for ${finalTitle}`);
+
+    const thumbnail = isYt 
+      ? `https://img.youtube.com/vi/${getYouTubeId(url)}/hqdefault.jpg`
+      : `https://picsum.photos/seed/${encodeURIComponent(finalTitle)}/120/90`;
+
+    const added = await PlaybackSyncService.addToQueue(
+      room.id,
+      url,
+      computedType as any,
+      finalTitle,
+      computedDuration,
+      thumbnail,
+      addedByUserId || undefined,
+      addedByName
+    );
+
+    if (added) {
+      setQueueUrlInput('');
+      setQueueTitleInput('');
+      // Refetch queue
+      const items = await PlaybackSyncService.fetchQueue(room.id);
+      setQueue(items);
+    }
+  };
+
+  const handleRemoveFromQueue = async (id: string, title: string) => {
+    if (!room || !currentIsHost) return;
+    writeLog('info', 'Media Queue', `Removing item "${title}"`);
+    await PlaybackSyncService.removeFromQueue(id);
+    const items = await PlaybackSyncService.fetchQueue(room.id);
+    setQueue(items);
+  };
+
+  const handlePlayNextInQueue = async (item: any) => {
+    if (!room || !currentIsHost) return;
+    
+    writeLog('info', 'Media Queue', `Promoting to play next: "${item.title}"`);
+    const currentItems = await PlaybackSyncService.fetchQueue(room.id);
+    const remaining = currentItems.filter((i) => i.id !== item.id);
+    const reordered = remaining.map((i, idx) => ({ id: i.id, position: idx + 1 }));
+
+    const updates = [{ id: item.id, position: 0 }, ...reordered];
+    await PlaybackSyncService.reorderQueue(updates);
+
+    const items = await PlaybackSyncService.fetchQueue(room.id);
+    setQueue(items);
+  };
+
+  const handleSkipNext = async () => {
+    if (!room || !currentIsHost) return;
+
+    if (queue.length > 0) {
+      const nextItem = queue[0];
+      writeLog('info', 'Sync Wave Engine', `Advancing lounge playback pipeline to next queue item: "${nextItem.title}"`);
+
+      // Mark off playlist queue
+      await PlaybackSyncService.markAsPlayed(nextItem.id);
+
+      // Clean load active playback space
+      setMediaUrl(nextItem.media_url);
+      const isYt = nextItem.media_type === 'youtube' || nextItem.media_url.includes('youtube.com') || nextItem.media_url.includes('youtu.be');
+      const loadedType = isYt ? 'video' : (nextItem.media_type as 'video' | 'audio');
+      setMediaType(loadedType);
+      setCurrentTime(0);
+      setIsPlaying(true);
+
+      await PlaybackSyncService.updateMedia(
+        room.id,
+        nextItem.media_url,
+        loadedType,
+        nextItem.duration,
+        user?.id
+      );
+
+      // Force play on playback target
+      setTimeout(() => {
+        if (playerRef.current) {
+          playerRef.current.currentTime = 0;
+          playerRef.current.play().catch((e) => console.log('Autoplay skipped item error:', e));
+        }
+      }, 300);
+
+      const items = await PlaybackSyncService.fetchQueue(room.id);
+      setQueue(items);
+    } else {
+      writeLog('warn', 'Sync Wave Engine', 'Cannot skip: Media Queue playlist is empty!');
+    }
+  };
+
+  // TYPING INDICATORS BROADCASTER
+  const handleTypingKeydown = () => {
+    const supabase = getSupabase() as any;
+    if (!supabase || !room || !currentMember || isTyping) return;
+
+    setIsTyping(true);
+    const channelName = `syncwave-realtime-room-${room.id}`;
+    const authorName = currentMember?.profiles?.display_name || currentMember?.display_name || 'Guest';
+
+    // Broadcast presence of typing
+    supabase.channel(channelName).send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: { authorName, typingState: true }
+    });
+
+    if ((window as any).typingTimer) {
+      clearTimeout((window as any).typingTimer);
+    }
+
+    (window as any).typingTimer = setTimeout(() => {
+      setIsTyping(false);
+      supabase.channel(channelName).send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { authorName, typingState: false }
+      });
+    }, 2000);
+  };
+
+  const handleMediaEnded = async () => {
+    if (!room || !currentIsHost) return;
+    writeLog('info', 'Sync Wave Engine', 'Active media stream finished playback.');
+    
+    if (queue.length > 0) {
+      const nextItem = queue[0];
+      writeLog('info', 'Sync Wave Engine', `Auto-play triggered. Loading next track in line: "${nextItem.title}"`);
+      
+      // Advance and mark off playlist
+      await PlaybackSyncService.markAsPlayed(nextItem.id);
+
+      // Set states
+      setMediaUrl(nextItem.media_url);
+      const isYt = nextItem.media_type === 'youtube' || nextItem.media_url.includes('youtube.com') || nextItem.media_url.includes('youtu.be');
+      const loadedType = isYt ? 'video' : (nextItem.media_type as 'video' | 'audio');
+      setMediaType(loadedType);
+      setCurrentTime(0);
+      setIsPlaying(true);
+
+      await PlaybackSyncService.updateMedia(
+        room.id,
+        nextItem.media_url,
+        loadedType,
+        nextItem.duration,
+        user?.id
+      );
+
+      // Lazy start player
+      setTimeout(() => {
+        if (playerRef.current) {
+          playerRef.current.currentTime = 0;
+          playerRef.current.play().catch((e) => console.log('Autoplay play error:', e));
+        }
+      }, 300);
+
+      const items = await PlaybackSyncService.fetchQueue(room.id);
+      setQueue(items);
+    } else {
+      writeLog('info', 'Sync Wave Engine', 'Playback ended and queue is empty, waiting in standby.');
+      setIsPlaying(false);
+      await PlaybackSyncService.pause(room.id, currentTime, user?.id);
+    }
+  };
+
   const handleLoadMedia = async (url: string, type: 'video' | 'audio') => {
     if (!room || !currentIsHost) return;
     
@@ -593,6 +807,11 @@ export default function RoomPage() {
             }
           }, 300);
           
+          // Fetch current media queue
+          PlaybackSyncService.fetchQueue(activeRoom.id).then((items) => {
+            setQueue(items);
+          });
+
           setSyncStatusText('Real-time synchronization established.');
         }
       });
@@ -699,6 +918,12 @@ export default function RoomPage() {
           console.log('[Room Realtime Update] messages payload:', payload);
           const newMsg = payload.new;
           
+          // Increment unread count for guest / other member if they are not author
+          const mAuthor = currentMember?.user_id === newMsg.sender_id || currentMember?.guest_id === newMsg.sender_id;
+          if (!mAuthor) {
+            setUnreadCount((c) => c + 1);
+          }
+
           // Use members list in state to resolve display name matching sender_id quickly
           setMembers((currentMembers) => {
             const senderCell = currentMembers.find(
@@ -783,9 +1008,33 @@ export default function RoomPage() {
           }
         }
       )
+      // Listen to media queue additions, removals or position swaps
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'media_queue', filter: `room_id=eq.${room.id}` },
+        async (payload: any) => {
+          console.log('[Room Realtime Update] media_queue payload:', payload);
+          const freshQueue = await PlaybackSyncService.fetchQueue(room.id);
+          setQueue(freshQueue);
+        }
+      )
+      // Typing Broadcast indicators
+      .on('broadcast', { event: 'typing' }, (payload: any) => {
+        const { authorName, typingState } = payload.payload;
+        if (authorName) {
+          setTypingUsers((current) => {
+            if (typingState) {
+              if (current.includes(authorName)) return current;
+              return [...current, authorName];
+            } else {
+              return current.filter((u) => u !== authorName);
+            }
+          });
+        }
+      })
       .subscribe((status: any) => {
         if (status === 'SUBSCRIBED') {
-          writeLog('success', 'Lounge synced', `Supabase Realtime subscription status: CONNECTED to room_members, messages, & playback_state!`);
+          writeLog('success', 'Lounge synced', `Supabase Realtime subscription status: CONNECTED to room_members, messages, playback_state, & media_queue!`);
         }
       });
 
@@ -1022,157 +1271,467 @@ export default function RoomPage() {
   }
 
   // Active user / host is resolved! Render pristine Collaborative Workspace
-  const isHost = room.host_id === user?.id;
-
-  return (
-    <div id="room-viewport" className="min-h-screen bg-stone-950 text-stone-100 flex flex-col font-sans select-none overflow-hidden h-screen">
+  const isHost = room.host_id === user?.id;  return (
+    <div id="room-viewport" className="min-h-screen bg-stone-950 text-stone-100 flex flex-col font-sans select-none overflow-y-auto pb-16 relative">
       
-      {/* Top Lounge Bar Header */}
-      <header id="room-header animate-fade-in" className="bg-stone-900/90 border-b border-stone-800/60 backdrop-blur-sm px-6 py-3 flex items-center justify-between shrink-0 z-40">
-        <div className="flex items-center space-x-3">
-          <div className="p-1.5 bg-gradient-to-br from-amber-500 to-amber-600 border border-amber-400/20 rounded-xl text-stone-950">
-            <Radio className="w-4 h-4 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h1 className="text-sm font-bold tracking-tight text-white mb-0">{room.name}</h1>
-              <span className="text-[9px] bg-stone-800 text-amber-500 font-mono px-1.5 py-0.5 rounded border border-stone-750 uppercase tracking-wider font-bold">
-                Room code: {room.slug}
-              </span>
-            </div>
-            <p className="text-[10px] text-stone-400 truncate max-w-sm">
-              {room.description || 'Synchronized Collaborative Listening Room'}
-            </p>
-          </div>
-        </div>
+      {/* Background decoration */}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.05),transparent_80%)] pointer-events-none z-0"></div>
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-stone-800 to-transparent"></div>
 
-        {/* Quick action buttons */}
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={copyInviteLink}
-            id="copy-invite-btn"
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-800 hover:bg-stone-750 border border-stone-700/60 rounded-xl text-xs text-stone-300 font-medium transition active:scale-95 cursor-pointer"
-          >
-            {copiedLink ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-green-400" />
-                <span className="text-green-400">Link Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" />
-                <span>Invite Link</span>
-              </>
+      <div className="max-w-3xl mx-auto w-full px-4 pt-6 space-y-6 relative z-10">
+
+        {/* 1. ROOM HEADER CARD */}
+        <div id="room-header-container" className="bg-stone-900/40 backdrop-blur-md rounded-2xl border border-stone-850 p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center space-x-3.5">
+              <div className="p-2.5 bg-gradient-to-br from-amber-500 to-rose-500 rounded-xl text-stone-950 shadow-lg shadow-amber-500/10 shrink-0">
+                <Radio className="w-5 h-5 animate-pulse" />
+              </div>
+              <div className="space-y-0.5 min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-lg font-extrabold tracking-tight text-white">{room.name}</h1>
+                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    {room.slug}
+                  </span>
+                  {currentIsHost && (
+                    <span className="flex items-center gap-1 text-[9px] bg-rose-500/10 border border-rose-500/20 text-rose-400 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                      <Crown className="w-2.5 h-2.5" /> HOST
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-stone-400 leading-relaxed truncate max-w-sm sm:max-w-md">
+                  {room.description || 'Elevated Synchronized Listening Lounge'}
+                </p>
+              </div>
+            </div>
+
+            {/* Header control buttons */}
+            <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+              <button
+                onClick={copyInviteLink}
+                id="copy-invite-btn"
+                className="flex items-center space-x-1.5 px-3.5 py-2 bg-stone-850 hover:bg-stone-800 border border-stone-850 rounded-xl text-xs text-stone-300 font-semibold transition cursor-pointer hover:border-stone-700 active:scale-95 whitespace-nowrap"
+              >
+                {copiedLink ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-green-400 animate-bounce" />
+                    <span className="text-green-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-stone-400" />
+                    <span>Invite Link</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={leaveRoom}
+                id="leave-room-btn"
+                className="flex items-center space-x-1.5 px-3.5 py-2 bg-stone-850 hover:bg-rose-950/30 border border-stone-850 hover:border-rose-900/30 rounded-xl text-xs text-stone-355 hover:text-rose-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Leave</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Connected state rail & stats */}
+          <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-stone-400 border-t border-stone-850/60 pt-3">
+            <div className="flex items-center space-x-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
+              <span className="text-stone-300 font-semibold uppercase tracking-wider text-[10px]">Realtime Cluster: Connected</span>
+            </div>
+            <div className="h-3 w-px bg-stone-850 hidden sm:block" />
+            <div className="flex items-center space-x-1.5 text-stone-400">
+              <Users className="w-3.5 h-3.5 text-amber-500" />
+              <span>{members.length} listening together</span>
+            </div>
+            {members.length === 1 && (
+              <div className="text-[9px] text-amber-400/80 animate-pulse bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/10 font-sans tracking-wide">
+                Invite friends to sync together!
+              </div>
             )}
-          </button>
-
-          <button
-            onClick={leaveRoom}
-            id="leave-room-btn"
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-xl text-xs text-rose-400 font-medium transition active:scale-95 cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5 shrink-0" />
-            <span>Leave Space</span>
-          </button>
+          </div>
         </div>
-      </header>
 
-      {/* Main Workspace split */}
-      <div id="room-body" className="flex-1 flex overflow-hidden min-h-0 relative">
-        
-        {/* Left Drawer component: Active Presence List (3 col equivalent for presence tracking) */}
-        <aside id="participants-rail" className="w-64 bg-stone-900/40 border-r border-stone-800/60 flex flex-col overflow-hidden shrink-0">
-          
-          <div className="p-4 border-b border-stone-800/60 flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <Users className="w-4 h-4 text-amber-500" />
-              <span className="text-xs font-mono font-bold text-stone-300 uppercase tracking-wider">Active Space ({members.length})</span>
+        {/* 2. ACTIVE SPACE / MEDIA PLAYER CARD */}
+        {(() => {
+          const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
+          const ytId = isYouTube ? getYouTubeId(mediaUrl) : null;
+
+          return (
+            <div id="media-player-container" className="bg-stone-900/40 border border-stone-850 rounded-2xl p-5 space-y-4 shadow-xl overflow-hidden relative">
+              <div className="absolute inset-0 bg-gradient-to-b from-stone-900/60 to-transparent pointer-events-none z-0"></div>
+
+              {/* Playing track metadata */}
+              <div className="flex items-center justify-between z-10 relative gap-3">
+                <div className="space-y-0.5 min-w-0">
+                  <span className="text-[9px] bg-amber-500/15 border border-amber-500/25 text-amber-400 font-mono px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold flex items-center gap-1 w-max">
+                    <Sparkles className="w-2.5 h-2.5 animate-bounce text-amber-500" /> NOW PLAYING
+                  </span>
+                  <h2 className="text-sm font-extrabold text-white truncate max-w-sm">
+                    {isYouTube ? (queue.length > 0 ? queue[0].title : 'YouTube Video Stream') : (mediaUrl ? mediaUrl.substring(mediaUrl.lastIndexOf('/') + 1) : 'No Stream Loaded')}
+                  </h2>
+                </div>
+                
+                <div className="shrink-0">
+                  <span className={`text-[9px] font-mono font-bold uppercase px-2.5 py-1 rounded-lg ${currentIsHost ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-stone-900 border border-stone-850 text-stone-400'}`}>
+                    {currentIsHost ? 'HOST CONSOLE' : 'LISTENER'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Actual player workspace */}
+              <div className="relative rounded-xl overflow-hidden bg-black aspect-video border border-stone-850 z-10 select-none">
+                {mediaUrl ? (
+                  isYouTube && ytId ? (
+                    <div className="w-full h-full relative">
+                      <iframe
+                        src={`https://www.youtube.com/embed/${ytId}?autoplay=${isPlaying ? 1 : 0}&start=${Math.floor(currentTime)}&enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                        className="w-full h-full object-contain"
+                        title="SyncWave YouTube"
+                        frameBorder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                      {/* Overlay pointer blocker for Guest so they cannot click play inside YouTube directly bypassing Host alignment */}
+                      {!currentIsHost && (
+                        <div className="absolute inset-0 bg-transparent z-20 pointer-events-auto"></div>
+                      )}
+                    </div>
+                  ) : (
+                    mediaType === 'audio' ? (
+                      /* Styled rotating turntable view */
+                      <div className="w-full h-full flex flex-col items-center justify-center py-6 relative">
+                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(245,158,11,0.03),transparent_70%)] pointer-events-none"></div>
+                        
+                        {/* Rotating visualizer vinyl record circle */}
+                        <div className={`p-6 bg-stone-900 border-[5px] border-stone-800 rounded-full flex items-center justify-center shadow-2xl relative ${isPlaying ? 'animate-spin' : ''}`} style={{ animationDuration: '24s' }}>
+                          <Disc className="w-16 h-16 text-amber-500" />
+                          <div className="absolute w-4 h-4 bg-stone-950 rounded-full border-2 border-stone-800 flex items-center justify-center">
+                            <div className="w-1 h-1 bg-stone-600 rounded-full"></div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 text-center px-4">
+                          <p className="text-xs font-semibold text-stone-300 truncate max-w-sm mt-1">
+                            {mediaUrl ? mediaUrl.substring(mediaUrl.lastIndexOf('/') + 1) : 'No track loaded'}
+                          </p>
+                          <span className="text-[10px] text-stone-550 font-mono uppercase tracking-wider block mt-0.5">High-Fidelity Audio Stream</span>
+                        </div>
+
+                        {/* Hidden underlying element that runs audio, retaining exact same events binding */}
+                        <video
+                          ref={playerRef}
+                          src={mediaUrl}
+                          style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
+                          onTimeUpdate={handleTimeUpdate}
+                          onLoadedMetadata={handleLoadedMetadata}
+                          onEnded={handleMediaEnded}
+                        />
+                      </div>
+                    ) : (
+                      /* Direct Video file playback */
+                      <video
+                        ref={playerRef}
+                        src={mediaUrl}
+                        onClick={currentIsHost ? (isPlaying ? handleHostPause : handleHostPlay) : undefined}
+                        className="w-full h-full object-contain cursor-pointer"
+                        onTimeUpdate={handleTimeUpdate}
+                        onLoadedMetadata={handleLoadedMetadata}
+                        onEnded={handleMediaEnded}
+                      />
+                    )
+                  )
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-4">
+                    <div className="w-12 h-12 bg-stone-900 border border-stone-850 text-stone-500 rounded-xl flex items-center justify-center shadow-xl">
+                      <Tv className="w-6 h-6 opacity-60" />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="text-xs font-bold text-stone-300 tracking-wide uppercase font-mono">STANDBY: Empty Play Queue</h3>
+                      <p className="text-[11px] text-stone-450 leading-relaxed max-w-xs mx-auto">
+                        {currentIsHost 
+                          ? "Load a fast stream preset below or append items to the Media Queue playlist to start synchronization." 
+                          : "The lounge host has not loaded media tracks yet. Waiting on authority..."}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Time slider & media coordinates */}
+              {mediaUrl && (
+                <div className="space-y-2 z-10 relative">
+                  <div className="flex items-center justify-between text-xs font-mono text-stone-450">
+                    <span className="text-amber-500 font-bold">{formatTime(currentTime)}</span>
+                    <span>{formatTime(duration)}</span>
+                  </div>
+
+                  <div className="relative group flex items-center">
+                    <input
+                      id="timeline-slider-range"
+                      type="range"
+                      min={0}
+                      max={duration || 100}
+                      step={1}
+                      value={currentTime}
+                      disabled={!currentIsHost}
+                      onChange={handleSliderChange}
+                      onMouseUp={handleSliderRelease}
+                      onTouchEnd={handleSliderRelease}
+                      className="w-full accent-amber-500 h-1 bg-stone-800 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed group-hover:h-1.5 transition-all"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Stage Controls */}
+              <div className="flex items-center justify-between gap-4 pt-3 border-t border-stone-850/60 z-10 relative">
+                
+                <div className="flex items-center space-x-2">
+                  {currentIsHost ? (
+                    <>
+                      {isPlaying ? (
+                        <button
+                          onClick={handleHostPause}
+                          id="host-pause-btn"
+                          className="p-2.5 bg-stone-850 hover:bg-stone-800 text-amber-500 border border-stone-800 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs font-bold leading-none gap-2 px-4 shadow-lg"
+                          title="Pause Stream"
+                        >
+                          <Pause className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                          <span>PAUSE</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={handleHostPlay}
+                          id="host-play-btn"
+                          className="p-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs font-extrabold leading-none gap-2 px-5 shadow-lg shadow-amber-500/10"
+                          title="Play Stream"
+                        >
+                          <Play className="w-3.5 h-3.5 text-stone-950 fill-stone-950" />
+                          <span>PLAY</span>
+                        </button>
+                      )}
+
+                      {/* Skip next button */}
+                      {queue.length > 0 && (
+                        <button
+                          onClick={handleSkipNext}
+                          id="host-skip-btn"
+                          className="p-2.5 bg-stone-850 hover:bg-stone-800 border border-stone-850 text-stone-300 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95 text-xs gap-1.5"
+                          title="Skip current media"
+                        >
+                          <SkipForward className="w-3.5 h-3.5 text-stone-400" />
+                          <span>SKIP TRACK</span>
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex items-center space-x-2 bg-stone-900 border border-stone-850 px-3.5 py-2 rounded-xl text-xs font-mono text-stone-400">
+                      <div className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></div>
+                      <span>{isPlaying ? 'PLAYING • BRANDED SYNC' : 'PAUSED • IN STANDBY'}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Volume block indicator */}
+                <div className="flex items-center space-x-2 text-xs text-stone-450 z-10">
+                  <button
+                    onClick={() => {
+                      const nextMute = !isMuted;
+                      setIsMuted(nextMute);
+                      if (playerRef.current) {
+                        playerRef.current.muted = nextMute;
+                      }
+                    }}
+                    id="mute-unmute-btn"
+                    className="p-2 bg-stone-900 hover:bg-stone-850 rounded-xl border border-stone-850 cursor-pointer transition text-stone-300"
+                  >
+                    {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500 animate-bounce" /> : <Volume2 className="w-3.5 h-3.5 text-stone-400" />}
+                  </button>
+                  <input
+                    id="volume-slider-range"
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={videoVolume}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setVideoVolume(v);
+                      if (playerRef.current) {
+                        playerRef.current.volume = v;
+                        playerRef.current.muted = false;
+                      }
+                      setIsMuted(false);
+                    }}
+                    className="w-14 accent-amber-500 h-1 bg-stone-850 rounded appearance-none cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {/* Host Quick Loads */}
+              {currentIsHost && (
+                <div className="p-4 bg-stone-950/60 rounded-xl border border-stone-850 space-y-3 z-10 relative">
+                  <div className="flex items-center justify-between font-mono text-[9px]">
+                    <span className="text-stone-450">LOAD CONSOLE / PRESET CHANNELS</span>
+                    <span className="text-amber-500 font-extrabold uppercase">HOST ONLY</span>
+                  </div>
+                  
+                  <form 
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!customUrlInput.trim()) return;
+                      const val = customUrlInput.trim();
+                      const isAudio = val.endsWith('.mp3') || val.includes('Helix') || val.includes('audio');
+                      handleLoadMedia(val, isAudio ? 'audio' : 'video');
+                      setCustomUrlInput('');
+                    }}
+                    className="flex gap-2"
+                  >
+                    <input
+                      id="preset-url-input"
+                      type="text"
+                      placeholder="Paste stream link (Big Buck Bunny, Helix Audio, YouTube...)"
+                      value={customUrlInput}
+                      onChange={(e) => setCustomUrlInput(e.target.value)}
+                      className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3.5 py-2.5 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                    />
+                    <button
+                      type="submit"
+                      id="submit-stream-btn"
+                      className="bg-amber-500 hover:bg-amber-600 text-stone-950 text-xs font-bold px-4 rounded-lg transition cursor-pointer"
+                    >
+                      LOAD
+                    </button>
+                  </form>
+
+                  <div className="flex gap-1.5 overflow-x-auto py-1 scrollbar-none">
+                    {MEDIA_PRESETS.map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => handleLoadMedia(p.url, p.type as any)}
+                        className="px-2.5 py-1.5 bg-stone-900 border border-stone-850 hover:bg-stone-800 text-[9px] font-mono text-stone-400 hover:text-stone-200 rounded-lg transition cursor-pointer shrink-0"
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
+          );
+        })()}
+
+        {/* 3. PARTICIPANTS LIST */}
+        <div id="participants-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-5 space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-stone-850/60">
+            <div className="flex items-center space-x-2">
+              <Users className="w-4 h-4 text-amber-500 animate-pulse" />
+              <span className="text-xs font-mono font-bold text-stone-205 uppercase tracking-widest">Active Members ({members.length})</span>
+            </div>
+            <span className="text-[10px] font-mono text-stone-500 uppercase">Interactive Rail</span>
           </div>
 
-          {/* Members list items wrapper */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <AnimatePresence>
               {members.map((member) => {
                 const memberIsHost = member.user_id === room.host_id;
                 const memberIsMe = member.id === currentMember?.id;
-                const nickname = member.profiles?.display_name || member.display_name || 'Wave Participant';
+                const nickname = member.profiles?.display_name || member.display_name || 'Lounge Guest';
                 const avatar = member.profiles?.avatar_url || `https://picsum.photos/seed/${nickname}/150`;
+
+                // Listening badge metrics
+                let statusBadge = "LISTENING";
+                let statusColor = "bg-emerald-500/10 border-emerald-500/20 text-emerald-400";
+                
+                if (!isPlaying) {
+                  statusBadge = "LOBBY";
+                  statusColor = "bg-amber-500/10 border-amber-500/20 text-amber-400 font-bold";
+                }
 
                 return (
                   <motion.div
                     key={member.id}
                     layoutId={`member-card-${member.id}`}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.9 }}
-                    className={`flex items-center justify-between p-2.5 rounded-xl border ${
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className={`flex items-center justify-between p-3.5 rounded-xl border transition-all ${
                       memberIsMe 
-                        ? 'bg-amber-500/10 border-amber-500/30 shadow-lg shadow-amber-500/5' 
-                        : 'bg-stone-900 border-stone-850'
+                        ? 'bg-amber-500/5 border-amber-500/30 shadow-lg shadow-amber-500/5' 
+                        : 'bg-stone-900/60 border-stone-850 hover:border-stone-800'
                     }`}
                   >
-                    <div className="flex items-center space-x-2.5 min-w-0">
-                      <div className="relative shrink-0">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="relative shrink-0 select-none">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img 
                           src={avatar} 
                           alt={nickname} 
-                          className={`w-8 h-8 rounded-lg object-cover border ${
-                            memberIsHost ? 'border-amber-500' : 'border-stone-700'
+                          className={`w-9 h-9 rounded-xl object-cover border ${
+                            memberIsHost ? 'border-amber-500/60 scale-105 shadow-amber-500/10' : 'border-stone-800'
                           }`}
                         />
                         {memberIsHost && (
-                          <span className="bg-amber-500 p-0.5 rounded-full absolute -top-1.5 -right-1 border border-stone-950 text-stone-950">
-                            <Crown className="w-2 h-2" />
+                          <span className="bg-amber-500 p-0.5 rounded-full absolute -top-1.5 -right-1.5 border border-stone-950 text-stone-950 shadow">
+                            <Crown className="w-2.5 h-2.5" />
                           </span>
                         )}
                       </div>
-                      
+
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1">
-                          <span className="text-xs font-semibold text-stone-100 truncate block leading-tight">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-stone-200 truncate leading-tight">
                             {nickname}
                           </span>
-                          {memberIsMe && <span className="text-[8px] text-amber-400 font-mono font-bold leading-normal shrink-0">(You)</span>}
+                          {memberIsMe && <span className="text-[8px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono font-extrabold px-1 rounded uppercase shrink-0">YOU</span>}
                         </div>
-                        <span className="text-[9px] font-mono text-stone-450 block uppercase leading-none mt-0.5">
-                          {memberIsHost ? 'Host' : member.guest_id ? 'Guest' : 'Reg Member'}
-                        </span>
+                        
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className={`text-[8px] font-mono font-extrabold px-1.5 py-0.5 rounded border uppercase leading-none tracking-wide ${statusColor}`}>
+                            {memberIsHost ? 'HOST' : statusBadge}
+                          </span>
+                          <span className="text-[9px] font-mono text-stone-500">
+                            Joined {new Date(member.joined_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Mute and Host action triggers */}
-                    <div className="flex items-center space-x-1 shrink-0">
+                    {/* Mute and Host Action Triggers */}
+                    <div className="flex items-center space-x-1.5 shrink-0 pl-1">
                       {member.is_muted && (
-                        <span className="p-1 bg-stone-950 text-rose-450 border border-stone-800 rounded-lg shrink-0" title="Muted by host">
+                        <span className="p-1 bg-stone-950 border border-rose-500/10 text-rose-455 rounded-lg shrink-0" title="Host Muted">
                           <MicOff className="w-3 h-3 text-rose-500" />
                         </span>
                       )}
 
-                      {/* Host controls for other members */}
-                      {isHost && !memberIsHost && (
-                        <div className="flex items-center space-x-0.5">
+                      {currentIsHost && !memberIsHost && (
+                        <div className="flex items-center bg-stone-950 border border-stone-850 p-1 rounded-lg gap-0.5 shadow-sm">
                           <button
                             onClick={() => toggleMuteMember(member.id, member.is_muted)}
-                            className={`p-1 rounded-lg text-stone-400 hover:text-amber-400 hover:bg-stone-850 cursor-pointer ${member.is_muted ? 'text-amber-500' : ''}`}
-                            title={member.is_muted ? "Unmute occupant" : "Mute occupant"}
+                            className={`p-1 rounded hover:bg-stone-850 hover:text-amber-400 transition cursor-pointer ${member.is_muted ? 'text-amber-500' : 'text-stone-500'}`}
+                            title={member.is_muted ? "Click to Unmute Member" : "Click to Mute Member"}
                           >
-                            {member.is_muted ? <Mic className="w-3 h-3" /> : <MicOff className="w-3.5 h-3.5" />}
+                            {member.is_muted ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
                           </button>
                           
                           <button
                             onClick={() => kickMember(member.id, nickname)}
-                            className="p-1 rounded-lg text-stone-400 hover:text-orange-400 hover:bg-stone-850 cursor-pointer"
-                            title="Remove from Room"
+                            className="p-1 rounded hover:bg-stone-850 hover:text-orange-400 transition text-stone-550 cursor-pointer"
+                            title="Kick occupant"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
 
                           <button
                             onClick={() => banMember(member.id, nickname)}
-                            className="p-1 rounded-lg text-stone-400 hover:text-red-500 hover:bg-stone-850 cursor-pointer"
-                            title="Ban from Lounge"
+                            className="p-1 rounded hover:bg-stone-850 hover:text-red-500 transition text-stone-550 cursor-pointer"
+                            title="Ban member permanently"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -1184,302 +1743,44 @@ export default function RoomPage() {
               })}
             </AnimatePresence>
           </div>
+        </div>
 
-          <div className="p-3 bg-stone-900/60 border-t border-stone-800/60 text-[10px] font-mono text-stone-450 flex flex-col space-y-1">
-            <div className="flex items-center justify-between text-stone-400">
-              <span>Sync status</span>
-              <span className="text-emerald-500 flex items-center gap-1">
-                <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-ping"></span>
-                ONLINE
-              </span>
-            </div>
-            <span>Transport: WS (Realtime)</span>
-          </div>
-        </aside>
-
-        {/* Central Display: Stylized SyncWave active stage */}
-        <main id="lounge-stage" className="flex-1 bg-stone-950 flex flex-col justify-between overflow-hidden relative">
-          
-          {/* Aesthetic grid overlay */}
-          <div className="absolute inset-0 bg-grid-pattern opacity-[0.02]"></div>
-
-          {/* Top header status bar */}
-          <div className="px-5 py-2.5 bg-stone-900/40 border-b border-stone-800/40 flex items-center justify-between text-[11px] font-mono text-stone-400 z-10 shrink-0 select-none">
+        {/* 4. LIVE TEXT CHAT PANEL */}
+        <div id="live-chat-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-5 space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-stone-850/60">
             <div className="flex items-center space-x-2">
-              <span className={`h-2 w-2 rounded-full ${syncStatusText.includes('Synced') ? 'bg-amber-500 animate-pulse' : 'bg-amber-600'}`}></span>
-              <span className="font-semibold text-stone-300">MEDIA PIPELINE</span>
-              <span className="text-stone-550 border border-stone-850 px-1 py-0 rounded text-[9px]">UTC CLUSTER</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span>Class: {room.is_private ? 'Secure Space' : 'Public Lobby'}</span>
-              <span>•</span>
-              <span className="text-amber-500 font-bold">{mediaType.toUpperCase()} Stream</span>
-            </div>
-          </div>
-
-          {/* Core Player Stage */}
-          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center z-10 relative overflow-hidden bg-stone-950/80">
-            {mediaUrl ? (
-              <div className="w-full h-full max-w-4xl flex flex-col items-center justify-center space-y-4">
-                {/* HTML5 video preview / player */}
-                <div className="relative w-full aspect-video md:max-h-[50vh] flex items-center justify-center bg-black/90 rounded-2xl border border-stone-800/80 overflow-hidden shadow-2xl">
-                  {mediaType === 'video' ? (
-                    <video
-                      id="wave-video-player"
-                      ref={playerRef}
-                      src={mediaUrl}
-                      onTimeUpdate={handleTimeUpdate}
-                      onLoadedMetadata={handleLoadedMetadata}
-                      playsInline
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center p-8 space-y-6">
-                      <video
-                        id="wave-audio-video-element"
-                        ref={playerRef}
-                        src={mediaUrl}
-                        onTimeUpdate={handleTimeUpdate}
-                        onLoadedMetadata={handleLoadedMetadata}
-                        playsInline
-                        className="hidden"
-                      />
-                      
-                      {/* Spinning vinyl visual stage indicating sync state */}
-                      <div className="relative flex items-center justify-center">
-                        {/* Visual waves around circle */}
-                        <div className="absolute -inset-10 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-600/10 rounded-full blur-2xl animate-pulse"></div>
-                        <div 
-                          className="absolute -inset-1.5 bg-gradient-to-r from-amber-500 to-amber-650 opacity-20 rounded-full blur animate-spin" 
-                          style={{ animationDuration: isPlaying ? '15s' : '0s' }}
-                        ></div>
-                        
-                        <div className="w-40 h-40 rounded-full bg-stone-900 border-4 border-stone-800 flex items-center justify-center relative shadow-2xl overflow-hidden group">
-                          {/* CD vinyl grooves */}
-                          <div className="absolute inset-1 rounded-full border border-stone-750/30 opacity-80"></div>
-                          <div className="absolute inset-3 rounded-full border border-stone-750/30 opacity-60"></div>
-                          <div className="absolute inset-6 rounded-full border border-stone-750/40 opacity-50"></div>
-                          <div className="absolute inset-10 rounded-full border border-stone-800/60"></div>
-
-                          <Disc 
-                            className="w-20 h-20 text-stone-800/80 absolute transform group-hover:scale-105 transition duration-500 animate-spin" 
-                            style={{ animationDuration: isPlaying ? '5s' : '0s' }} 
-                          />
-
-                          {/* Dynamic cover mock art center circle */}
-                          <div className="w-12 h-12 rounded-full bg-stone-950 border-2 border-stone-850 flex items-center justify-center z-20">
-                            <div className={`h-3 w-3 rounded-full flex items-center justify-center ${isPlaying ? 'bg-amber-500 animate-ping' : 'bg-stone-700'}`}>
-                              <div className="h-1.5 w-1.5 bg-stone-950 rounded-full"></div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="p-2 bg-stone-900 border border-stone-850 text-amber-500 rounded-full absolute -bottom-2 -right-2 shadow-lg flex items-center justify-center">
-                          <Music className="w-3.5 h-3.5" />
-                        </div>
-                      </div>
-                      
-                      <div className="text-center space-y-1">
-                        <p className="text-xs font-mono text-amber-500 uppercase tracking-widest font-bold">AUDIO BROADCAST</p>
-                        <p className="text-sm font-semibold text-stone-200 truncate max-w-sm px-4">
-                          {mediaUrl.substring(mediaUrl.lastIndexOf('/') + 1)}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Custom elegant status play button overlay if needed */}
-                </div>
-                
-                {/* Media description title */}
-                <span className="text-[10px] font-mono text-stone-500 truncate max-w-lg">
-                  Loaded URL: {mediaUrl}
-                </span>
-              </div>
-            ) : (
-              <div className="max-w-md space-y-6 flex flex-col items-center">
-                <div className="w-16 h-16 bg-stone-900 border border-stone-800 text-stone-500 rounded-2xl flex items-center justify-center shadow-xl">
-                  <Tv className="w-8 h-8 opacity-70" />
-                </div>
-                <div className="space-y-2">
-                  <h3 className="text-sm font-bold text-stone-200 tracking-wide uppercase font-mono">STANDBY: Empty Play Queue</h3>
-                  <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
-                    {isHost 
-                      ? "Paste a media URL stream below or select an instantaneous preset to initiate synchronization." 
-                      : "The host has not launched a streams source yet. Awaiting media loop initiations..."}
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Real-time Custom Media Controls bar */}
-          <div className="p-4 bg-stone-900 border-t border-stone-800/80 flex flex-col gap-3 shrink-0 z-20">
-            {/* Timeline track and timers */}
-            <div className="flex items-center space-x-3 text-[10px] text-stone-400 font-mono">
-              <span className="w-10 text-right">{formatTime(currentTime)}</span>
-              
-              <input
-                id="playback-timeline-range"
-                type="range"
-                min={0}
-                max={duration || 100}
-                step={0.1}
-                value={currentTime}
-                disabled={!isHost}
-                onChange={handleSliderChange}
-                onMouseUp={handleSliderRelease}
-                onTouchEnd={handleSliderRelease}
-                className="flex-1 accent-amber-500 h-1 bg-stone-800 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              
-              <span className="w-10 text-left">{formatTime(duration)}</span>
-            </div>
-
-            {/* Custom Control Buttons and load field */}
-            <div className="flex items-center justify-between">
-              {/* Play / pause controls */}
-              <div className="flex items-center space-x-3">
-                {isHost ? (
-                  isPlaying ? (
-                    <button
-                      onClick={handleHostPause}
-                      id="host-pause-btn"
-                      className="p-2 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-lg transition active:scale-95 cursor-pointer flex items-center justify-center font-bold"
-                      title="Pause Stream"
-                    >
-                      <Pause className="w-4 h-4" />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleHostPlay}
-                      id="host-play-btn"
-                      className="p-2 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-lg transition active:scale-95 cursor-pointer flex items-center justify-center font-bold"
-                      title="Play Stream"
-                    >
-                      <Play className="w-4 h-4" />
-                    </button>
-                  )
-                ) : (
-                  <div className="flex items-center space-x-1.5 bg-stone-950/80 border border-stone-850 px-2.5 py-1.5 rounded-lg text-[9px] uppercase font-mono tracking-wider text-stone-450">
-                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-ping"></span>
-                    <span>Host Syncing</span>
-                  </div>
-                )}
-
-                {/* Info status badge */}
-                <span className="text-[10px] font-mono text-stone-450 leading-none">
-                  {syncStatusText}
-                </span>
-              </div>
-
-              {/* Volume sliders and muted tags */}
-              <div className="flex items-center space-x-2 text-xs text-stone-400">
-                <button
-                  onClick={() => {
-                    const nextMute = !isMuted;
-                    setIsMuted(nextMute);
-                    if (playerRef.current) {
-                      playerRef.current.muted = nextMute;
-                    }
-                  }}
-                  id="mute-unmute-btn"
-                  className="p-1.5 hover:bg-stone-850 rounded-lg cursor-pointer transition"
-                >
-                  {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-500" /> : <Volume2 className="w-3.5 h-3.5 text-stone-300" />}
-                </button>
-                <input
-                  id="volume-slider-range"
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={videoVolume}
-                  onChange={(e) => {
-                    const v = parseFloat(e.target.value);
-                    setVideoVolume(v);
-                    if (playerRef.current) {
-                      playerRef.current.volume = v;
-                      playerRef.current.muted = false;
-                    }
-                    setIsMuted(false);
-                  }}
-                  className="w-14 accent-stone-300 h-1 bg-stone-850 rounded appearance-none cursor-pointer"
-                />
-              </div>
+              <MessageSquare className="w-4 h-4 text-amber-500" />
+              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Live Chat Room</span>
             </div>
             
-            {/* Host Load Source field: Only visible if isHost */}
-            {isHost && (
-              <div className="pt-2 border-t border-stone-850/80 flex flex-col gap-1.5">
-                <div className="flex items-center justify-between text-[9px] text-stone-450 font-mono select-none">
-                  <span>HOST CONSOLE: STREAM LOAD ENGINE</span>
-                  <span className="text-amber-500 font-bold uppercase">Authorized Manager</span>
-                </div>
-                
-                {/* Form to submit custom url */}
-                <form 
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!customUrlInput.trim()) return;
-                    const val = customUrlInput.trim();
-                    const isAudio = val.endsWith('.mp3') || val.includes('Helix') || val.includes('audio');
-                    handleLoadMedia(val, isAudio ? 'audio' : 'video');
-                    setCustomUrlInput('');
-                  }}
-                  className="flex items-center space-x-2"
-                >
-                  <input
-                    id="preset-url-input"
-                    type="text"
-                    placeholder="Enter absolute audio or video URL stream..."
-                    value={customUrlInput}
-                    onChange={(e) => setCustomUrlInput(e.target.value)}
-                    className="flex-1 bg-stone-950/90 text-xs text-stone-300 px-3 py-2 rounded-lg border border-stone-850 focus:outline-none focus:ring-1 focus:ring-amber-500 placeholder-stone-650"
-                  />
-                  <button
-                    type="submit"
-                    id="submit-stream-btn"
-                    className="bg-stone-850 hover:bg-stone-800 text-stone-200 text-xs px-3.5 py-2 rounded-lg border border-stone-800 transition font-mono uppercase tracking-wider cursor-pointer"
-                  >
-                    LOAD
-                  </button>
-                </form>
-
-                {/* Quick presets selections */}
-                <div className="flex items-center space-x-2 overflow-x-auto py-1 scrollbar-none select-none">
-                  {MEDIA_PRESETS.map((p, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      id={`media-preset-${idx}`}
-                      onClick={() => handleLoadMedia(p.url, p.type as any)}
-                      className="px-2.5 py-1 bg-stone-950 border border-stone-850 hover:border-stone-750 rounded text-[9px] font-mono text-stone-500 hover:text-stone-300 active:scale-95 transition cursor-pointer shrink-0"
-                    >
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {/* Unread Pill indicator */}
+            {unreadCount > 0 && (
+              <button
+                onClick={() => {
+                  setUnreadCount(0);
+                  chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className="text-[9px] bg-amber-500 text-stone-950 font-bold px-2.5 py-0.5 rounded-full animate-bounce transition cursor-pointer hover:bg-amber-400"
+              >
+                {unreadCount} UNREAD MESSAGES
+              </button>
             )}
           </div>
 
-        </main>
+          {/* Typing active notification */}
+          {typingUsers.length > 0 && (
+            <div className="text-[10px] font-mono text-amber-500/90 animate-pulse flex items-center gap-1.5 py-0.5">
+              <span className="h-1.5 w-1.5 bg-amber-500 rounded-full animate-ping"></span>
+              <span>{typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...</span>
+            </div>
+          )}
 
-        {/* Right Drawer component: Real-time Text Chat */}
-        <aside id="chat-panel" className="w-80 bg-stone-900/40 border-l border-stone-800/60 flex flex-col overflow-hidden shrink-0">
-          
-          <div className="p-4 border-b border-stone-800/60 flex items-center space-x-2">
-            <MessageSquare className="w-4 h-4 text-amber-500" />
-            <span className="text-xs font-mono font-bold text-stone-300 uppercase tracking-wider">Live Chat Lobby</span>
-          </div>
-
-          {/* Messages block */}
-          <div id="messages-list" className="flex-1 overflow-y-auto p-4 space-y-3.5 scrollbar-thin">
+          {/* messages container */}
+          <div id="messages-list" className="h-56 overflow-y-auto p-4 space-y-3.5 bg-stone-950/40 rounded-xl border border-stone-850/80 scrollbar-thin">
             {messages.length === 0 ? (
-              <div className="text-center py-10 space-y-2">
+              <div className="h-full flex flex-col items-center justify-center text-center space-y-1">
                 <p className="text-xs text-stone-500 font-mono italic">No messages sent yet inside this space.</p>
-                <p className="text-[10px] text-stone-600 font-sans leading-normal">Say hello to other participants in SyncWave!</p>
+                <p className="text-[10px] text-stone-605 font-sans leading-normal">Start the conversation by sending a text below!</p>
               </div>
             ) : (
               messages.map((msg) => {
@@ -1487,8 +1788,8 @@ export default function RoomPage() {
                 
                 return (
                   <div key={msg.id} className={`flex flex-col ${isMyMessage ? 'items-end' : 'items-start'}`}>
-                    <div className="flex items-center space-x-1.5 mb-1 max-w-full">
-                      <span className="text-[10px] font-semibold text-stone-400 truncate max-w-[120px]">
+                    <div className="flex items-center space-x-1.5 mb-1 max-w-full select-none">
+                      <span className="text-[10px] font-bold text-stone-400 truncate max-w-[120px]">
                         {msg.sender_name}
                       </span>
                       <span className="text-[8px] font-mono text-stone-600">
@@ -1496,10 +1797,10 @@ export default function RoomPage() {
                       </span>
                     </div>
 
-                    <div className={`text-xs px-3 py-2 rounded-xl leading-relaxed max-w-[90%] break-words ${
+                    <div className={`text-xs px-3.5 py-2.5 rounded-2xl leading-relaxed max-w-[85%] break-words shadow-sm ${
                       isMyMessage 
-                        ? 'bg-amber-500 text-stone-950 font-medium rounded-tr-none' 
-                        : 'bg-stone-850 text-stone-100 rounded-tl-none border border-stone-800'
+                        ? 'bg-amber-500 text-stone-950 font-bold rounded-tr-none' 
+                        : 'bg-stone-900 text-stone-100 rounded-tl-none border border-stone-850'
                     }`}>
                       {msg.content}
                     </div>
@@ -1510,35 +1811,161 @@ export default function RoomPage() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* Chat input form */}
-          <div className="p-3 bg-stone-900 border-t border-stone-800/60">
+          {/* Input engine */}
+          <div>
             {currentMember?.is_muted ? (
-              <div className="bg-rose-500/10 border border-rose-500/20 rounded-xl p-3 text-[10px] text-rose-400 leading-normal flex items-start gap-1.5">
-                <MicOff className="w-3.5 h-3.5 mt-0.5" />
-                <span>You have been muted inside this chat by the room host. Sending messages is restricted.</span>
+              <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-3 text-[10.5px] text-rose-450 leading-relaxed flex items-start gap-2 select-none">
+                <MicOff className="w-4 h-4 text-rose-450 mt-0.5 shrink-0" />
+                <span>Muted. Your message sending authorization has been suspended by the room host.</span>
               </div>
             ) : (
-              <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+              <form 
+                onSubmit={(e) => {
+                  handleSendMessage(e);
+                  setUnreadCount(0);
+                }} 
+                className="flex gap-2"
+              >
                 <input
                   type="text"
                   maxLength={160}
-                  placeholder="Type message..."
+                  placeholder="Ask a question or request a song..."
                   value={typedMessage}
-                  onChange={(e) => setTypedMessage(e.target.value)}
-                  className="flex-1 bg-stone-950 border border-stone-850 text-xs px-3 py-2.5 rounded-xl text-stone-200 focus:outline-none focus:ring-1 focus:ring-amber-500 transition focus:border-amber-500"
+                  onChange={(e) => {
+                    setTypedMessage(e.target.value);
+                    handleTypingKeydown();
+                  }}
+                  className="flex-1 bg-stone-950 border border-stone-850 text-xs px-4 py-2.5 rounded-xl text-stone-200 placeholder-stone-650 focus:outline-none focus:ring-1 focus:ring-amber-500 transition focus:border-amber-500"
                 />
                 <button
                   type="submit"
                   disabled={!typedMessage.trim()}
-                  className="p-2.5 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-xl transition cursor-pointer disabled:bg-stone-800 disabled:text-stone-600 shrink-0 select-none flex items-center justify-center active:scale-95 shadow-md shadow-amber-500/5 hover:shadow-amber-500/15"
+                  className="p-3 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-xl transition cursor-pointer disabled:bg-stone-900 disabled:text-stone-700 shrink-0 select-none flex items-center justify-center active:scale-95 shadow-md"
                 >
-                  <Send className="w-3.5 h-3.5" />
+                  <Send className="w-4 h-4 text-stone-950 fill-stone-950" />
                 </button>
               </form>
             )}
           </div>
+        </div>
 
-        </aside>
+        {/* 5. MEDIA QUEUE CARD */}
+        <div id="media-queue-container" className="bg-stone-900/30 rounded-2xl border border-stone-850 p-5 space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-stone-850/60">
+            <div className="flex items-center space-x-2">
+              <ListMusic className="w-4 h-4 text-amber-500" />
+              <span className="text-xs font-mono font-bold text-stone-200 uppercase tracking-widest">Lounge Queue playlist ({queue.length})</span>
+            </div>
+            <span className="text-[10px] font-mono text-stone-500 uppercase">Interactive Scheduler</span>
+          </div>
+
+          {/* Add Queue Item Form - Host rights or restricted info block */}
+          {currentIsHost ? (
+            <div className="p-4 bg-stone-950/60 rounded-xl border border-stone-850 space-y-2.5">
+              <span className="text-[9px] font-mono font-extrabold uppercase text-amber-500 tracking-wider">Host: Append Scheduled Stream</span>
+              <form onSubmit={handleAddMediaToQueue} className="space-y-2">
+                <input
+                  type="text"
+                  required
+                  placeholder="Paste direct audio/video streaming path or YouTube URL..."
+                  value={queueUrlInput}
+                  onChange={(e) => setQueueUrlInput(e.target.value)}
+                  className="w-full bg-stone-900 border border-stone-800 text-xs px-3.5 py-2.5 rounded-lg text-stone-200 placeholder-stone-600 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter Optional Track Custom Title..."
+                    value={queueTitleInput}
+                    onChange={(e) => setQueueTitleInput(e.target.value)}
+                    className="flex-1 bg-stone-900 border border-stone-800 text-xs px-3.5 py-2.5 rounded-lg text-stone-200 placeholder-stone-605 focus:outline-none focus:ring-1 focus:ring-amber-500 transition"
+                  />
+                  <button
+                    type="submit"
+                    className="bg-amber-500 hover:bg-amber-600 text-stone-950 text-xs font-extrabold px-4 rounded-lg transition whitespace-nowrap cursor-pointer hover:shadow-lg hover:shadow-amber-500/5 active:scale-95"
+                  >
+                    ADD TO PLAYLIST
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <div className="p-3.5 bg-stone-900 border border-stone-850 rounded-xl text-[10px] text-stone-450 text-center font-sans">
+              Playlist Queue is read-only. Ask the Space Host to append additional tracks to the synchronization timeline.
+            </div>
+          )}
+
+          {/* Stack of media queue items */}
+          <div className="space-y-2">
+            {queue.length === 0 ? (
+              <div className="py-8 bg-stone-950/30 rounded-xl border border-stone-850/40 text-center space-y-1">
+                <p className="text-xs text-stone-500 font-mono italic">No media added yet.</p>
+                <p className="text-[10px] text-stone-600 font-sans leading-normal">
+                  {currentIsHost ? 'Use the scheduler loaded block above to queue up streams.' : 'Waiting on the lounge host to configure and queue up music.'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {queue.map((item, idx) => (
+                  <div 
+                    key={item.id}
+                    className="flex items-center justify-between p-3.5 bg-stone-950/40 rounded-xl border border-stone-850 gap-3 hover:border-stone-800 transition"
+                  >
+                    <div className="flex items-center space-x-3.5 min-w-0">
+                      {/* Thumbnail wrapper */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img 
+                        src={item.thumbnail_url || `https://picsum.photos/seed/${encodeURIComponent(item.title || '')}/120/90`} 
+                        alt={item.title || 'Queue Track'} 
+                        className="w-12 h-9 rounded object-cover border border-stone-800 shrink-0 select-none"
+                      />
+                      
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-mono text-amber-500 uppercase font-bold shrink-0">#{idx + 1}</span>
+                          <span className="text-xs font-bold text-stone-200 truncate block leading-tight">
+                            {item.title || 'Untitled Stream track'}
+                          </span>
+                        </div>
+                        
+                        <div className="flex items-center gap-2 mt-1 font-mono text-[9px] text-stone-500">
+                          <span className="uppercase text-[8px] bg-stone-900 px-1.5 py-0.5 rounded border border-stone-850 text-stone-400 font-bold tracking-wider shrink-0">
+                            {item.media_type}
+                          </span>
+                          <span>•</span>
+                          <span>{formatTime(item.duration)}</span>
+                          <span>•</span>
+                          <span>added by {item.added_by_name || 'Lounge Host'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Left item actions for Host */}
+                    {currentIsHost && (
+                      <div className="flex items-center bg-stone-900 border border-stone-850 p-1 rounded-lg gap-0.5 shadow-sm shrink-0">
+                        <button
+                          onClick={() => handlePlayNextInQueue(item)}
+                          className="p-1 rounded text-stone-500 hover:text-amber-400 hover:bg-stone-850 cursor-pointer"
+                          title="Play Next (Promote to position 0)"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        
+                        <button
+                          onClick={() => handleRemoveFromQueue(item.id, item.title || 'Track')}
+                          className="p-1 rounded text-stone-500 hover:text-rose-500 hover:bg-stone-850 cursor-pointer"
+                          title="Delete from list"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
 
       </div>
 

@@ -28,3 +28,19 @@ export interface HostControlEvent {
   current_time?: number;
   is_playing?: boolean;
 }
+
+export interface MediaQueueItem {
+  id: string;
+  room_id: string;
+  media_url: string;
+  media_type: 'video' | 'audio' | 'youtube';
+  title: string | null;
+  thumbnail_url: string | null;
+  duration: number;
+  added_by: string | null;
+  added_by_name: string | null;
+  position: number;
+  is_played: boolean;
+  created_at: string;
+}
+

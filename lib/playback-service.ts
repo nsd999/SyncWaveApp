@@ -1,5 +1,5 @@
 import { getSupabase } from './supabase';
-import { PlaybackState } from '@/types/playback';
+import { PlaybackState, MediaQueueItem } from '@/types/playback';
 import { writeLog } from './logger';
 
 export class PlaybackSyncService {
@@ -211,4 +211,147 @@ export class PlaybackSyncService {
 
     return channel;
   }
+
+  /**
+   * Fetches the room's current media queue.
+   */
+  static async fetchQueue(roomId: string): Promise<MediaQueueItem[]> {
+    const supabase = getSupabase() as any;
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('media_queue')
+        .select('*')
+        .eq('room_id', roomId)
+        .eq('is_played', false)
+        .order('position', { ascending: true });
+
+      if (error) throw error;
+      return (data || []) as MediaQueueItem[];
+    } catch (e: any) {
+      console.error('[PlaybackSyncService] Failed to fetch media queue:', e.message);
+      return [];
+    }
+  }
+
+  /**
+   * Appends an item to the media queue.
+   */
+  static async addToQueue(
+    roomId: string,
+    mediaUrl: string,
+    mediaType: 'video' | 'audio' | 'youtube',
+    title: string,
+    duration: number,
+    thumbnailUrl?: string,
+    addedBy?: string,
+    addedByName?: string
+  ): Promise<MediaQueueItem | null> {
+    const supabase = getSupabase() as any;
+    if (!supabase) return null;
+
+    try {
+      // Find current max position to append to the end
+      const { data: existing, error: fetchErr } = await supabase
+        .from('media_queue')
+        .select('position')
+        .eq('room_id', roomId)
+        .eq('is_played', false)
+        .order('position', { ascending: false })
+        .limit(1);
+
+      if (fetchErr) throw fetchErr;
+
+      const nextPos = existing && existing.length > 0 ? existing[0].position + 1 : 0;
+
+      const itemData = {
+        room_id: roomId,
+        media_url: mediaUrl,
+        media_type: mediaType,
+        title: title || 'Untitled Stream',
+        thumbnail_url: thumbnailUrl || `https://picsum.photos/seed/${encodeURIComponent(mediaUrl)}/120/90`,
+        duration: duration || 0,
+        added_by: addedBy ? addedBy : null,
+        added_by_name: addedByName || 'Host',
+        position: nextPos,
+        is_played: false
+      };
+
+      const { data, error } = await supabase
+        .from('media_queue')
+        .insert(itemData as any)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      writeLog('success', 'Media Queue', `Added item to playlist: "${title}" at index ${nextPos}`);
+      return data as MediaQueueItem;
+    } catch (e: any) {
+      console.error('[PlaybackSyncService] Failed to add to media queue:', e.message);
+      return null;
+    }
+  }
+
+  /**
+   * Removes an item from the media queue.
+   */
+  static async removeFromQueue(id: string): Promise<void> {
+    const supabase = getSupabase() as any;
+    if (!supabase) return;
+
+    try {
+      const { error } = await supabase
+        .from('media_queue')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      writeLog('success', 'Media Queue', 'Removed item from queue');
+    } catch (e: any) {
+      console.error('[PlaybackSyncService] Failed to remove from media queue:', e.message);
+    }
+  }
+
+  /**
+   * Updates coordinates/positions of media items.
+   */
+  static async reorderQueue(items: { id: string; position: number }[]): Promise<void> {
+    const supabase = getSupabase() as any;
+    if (!supabase) return;
+
+    try {
+      // Save items sequentially
+      for (const item of items) {
+        await supabase
+          .from('media_queue')
+          .update({ position: item.position })
+          .eq('id', item.id);
+      }
+      writeLog('success', 'Media Queue', 'Playlist reordered successfully');
+    } catch (e: any) {
+      console.error('[PlaybackSyncService] Failed to reorder media queue:', e.message);
+    }
+  }
+
+  /**
+   * Marks a queue item as having been played / finished.
+   */
+  static async markAsPlayed(id: string): Promise<void> {
+    const supabase = getSupabase() as any;
+    if (!supabase) return;
+
+    try {
+      const { error } = await supabase
+        .from('media_queue')
+        .update({ is_played: true })
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (e: any) {
+      console.error('[PlaybackSyncService] Failed to set is_played state:', e.message);
+    }
+  }
 }
+
