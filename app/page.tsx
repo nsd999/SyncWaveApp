@@ -70,8 +70,7 @@ export default function Home() {
     if (user) {
       setShowCreateModal(true);
     } else {
-      localStorage.setItem('syncwave-pending-create', 'true');
-      router.push('/login');
+      setShowAuthWarningModal(true);
     }
   };
 
