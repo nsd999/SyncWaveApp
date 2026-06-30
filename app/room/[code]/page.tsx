@@ -104,6 +104,8 @@ export default function RoomPage() {
   
   // Auxiliary visual alerts
   const [copiedLink, setCopiedLink] = React.useState(false);
+  const [copiedCode, setCopiedCode] = React.useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = React.useState(false);
   const [chatScrolled, setChatScrolled] = React.useState(false);
   const chatEndRef = React.useRef<HTMLDivElement>(null);
 
@@ -1866,21 +1868,8 @@ export default function RoomPage() {
     });
   };
 
-  const shareRoom = async () => {
-    if (typeof navigator !== 'undefined' && navigator.share) {
-      try {
-        await navigator.share({
-          title: `Join SyncWave Room: ${room?.name || 'Sync Listening'}`,
-          text: `Join my SyncWave real-time synchronized listening lobby!`,
-          url: window.location.href,
-        });
-        writeLog('info', 'Share App', 'Successfully shared room via standard browser api');
-      } catch (err) {
-        copyInviteLink();
-      }
-    } else {
-      copyInviteLink();
-    }
+  const shareRoom = () => {
+    setIsShareModalOpen(true);
   };
 
   // Render Supabase initialization error card if auth config is missing
@@ -2203,6 +2192,18 @@ export default function RoomPage() {
                 )}
               </button>
 
+              <a
+                href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 rounded-xl text-xs text-sky-600 dark:text-sky-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
+              >
+                <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                  <path d="M11.944 0C5.337 0 0 5.337 0 11.944c0 6.607 5.337 11.944 11.944 11.944 6.608 0 11.944-5.337 11.944-11.944C23.888 5.337 18.552 0 11.944 0zm5.556 8.3c-.172 1.812-.924 6.25-1.306 8.3-.162.868-.482 1.16-.792 1.188-.674.062-1.186-.445-1.838-.872-1.02-.668-1.597-1.082-2.587-1.734-1.144-.754-.402-1.168.25-1.844.17-.176 3.128-2.87 3.185-3.11.007-.031.014-.146-.055-.207-.068-.061-.169-.04-.242-.024-.104.024-1.764 1.12-5.0 3.31-.474.326-.88.487-1.218.479-.373-.008-1.089-.21-1.623-.383-.654-.213-1.174-.326-1.129-.688.023-.189.283-.382.78-.58 3.048-1.326 5.08-2.204 6.095-2.636 2.9-.1.233.1.65.114.925.1.018.232.042.483-.021.233-.062.518-.211.758-.415.24-.204.288-.475.253-.781-.035-.306-.217-.43-.45-.48z"/>
+                </svg>
+                <span>Telegram</span>
+              </a>
+
               <button
                 onClick={shareRoom}
                 className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-xl text-xs text-amber-600 dark:text-amber-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
@@ -2232,6 +2233,13 @@ export default function RoomPage() {
             <div className="flex items-center space-x-1.5 text-stone-550 dark:text-stone-400">
               <Users className="w-3.5 h-3.5 text-amber-500" />
               <span>{members.length} member{members.length === 1 ? '' : 's'} connected</span>
+            </div>
+            <div className="h-3 w-px bg-stone-200 dark:bg-stone-850 hidden sm:block" />
+            <div className="flex items-center space-x-1.5 text-stone-550 dark:text-stone-400">
+              <svg className="w-3.5 h-3.5 text-sky-500 fill-current" viewBox="0 0 24 24">
+                <path d="M11.944 0C5.337 0 0 5.337 0 11.944c0 6.607 5.337 11.944 11.944 11.944 6.608 0 11.944-5.337 11.944-11.944C23.888 5.337 18.552 0 11.944 0zm5.556 8.3c-.172 1.812-.924 6.25-1.306 8.3-.162.868-.482 1.16-.792 1.188-.674.062-1.186-.445-1.838-.872-1.02-.668-1.597-1.082-2.587-1.734-1.144-.754-.402-1.168.25-1.844.17-.176 3.128-2.87 3.185-3.11.007-.031.014-.146-.055-.207-.068-.061-.169-.04-.242-.024-.104.024-1.764 1.12-5.0 3.31-.474.326-.88.487-1.218.479-.373-.008-1.089-.21-1.623-.383-.654-.213-1.174-.326-1.129-.688.023-.189.283-.382.78-.58 3.048-1.326 5.08-2.204 6.095-2.636 2.9-.1.233.1.65.114.925.1.018.232.042.483-.021.233-.062.518-.211.758-.415.24-.204.288-.475.253-.781-.035-.306-.217-.43-.45-.48z"/>
+              </svg>
+              <span>Control this room using <a href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:underline font-bold transition">SyncWaveBot</a></span>
             </div>
           </div>
         </div>
@@ -3163,6 +3171,154 @@ export default function RoomPage() {
     </div> {/* END OF GRID SPLIT CONTAINER */}
 
       </div>
+
+      {/* SHARING & TELEGRAM CONTROL MODAL */}
+      <AnimatePresence>
+        {isShareModalOpen && (
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsShareModalOpen(false)}
+              className="absolute inset-0 bg-stone-950/60 backdrop-blur-md"
+            />
+            
+            {/* Modal Body */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md overflow-hidden rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-6 shadow-2xl z-10"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-stone-100 dark:border-stone-800 mb-5">
+                <div className="flex items-center space-x-2">
+                  <div className="p-1.5 bg-amber-500/10 text-amber-500 rounded-lg">
+                    <Plus className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-sm font-extrabold text-stone-900 dark:text-white uppercase tracking-wider">
+                    Share listening lounge
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setIsShareModalOpen(false)}
+                  className="p-1.5 hover:bg-stone-100 dark:hover:bg-stone-850 rounded-xl text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {/* Copy Invite Link */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-stone-400">Invite Link</label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={typeof window !== 'undefined' ? window.location.href : ''}
+                      className="w-full text-xs font-mono p-2.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-950 text-stone-600 dark:text-stone-300 select-all outline-none"
+                    />
+                    <button
+                      onClick={copyInviteLink}
+                      className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-xs font-bold rounded-xl transition active:scale-95 flex items-center gap-1 cursor-pointer shadow-md shadow-amber-500/5 shrink-0"
+                    >
+                      {copiedLink ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Copy Room Code */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-stone-400">Lounge Code</label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={room?.slug || ''}
+                      className="w-full text-xs font-mono p-2.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-950 text-stone-700 dark:text-stone-300 font-bold tracking-widest text-center select-all outline-none"
+                    />
+                    <button
+                      onClick={() => {
+                        if (room?.slug) {
+                          navigator.clipboard.writeText(room.slug).then(() => {
+                            setCopiedCode(true);
+                            setTimeout(() => setCopiedCode(false), 2000);
+                            showToast("Lounge code copied to clipboard!", "success");
+                          });
+                        }
+                      }}
+                      className="px-4 py-2.5 bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-200 text-xs font-bold rounded-xl transition active:scale-95 flex items-center gap-1 cursor-pointer shrink-0 border border-stone-250 dark:border-stone-750"
+                    >
+                      {copiedCode ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-green-500" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="h-px bg-stone-150 dark:bg-stone-850 my-4" />
+
+                {/* Companion Bot Controls */}
+                <div className="space-y-2.5">
+                  <h4 className="text-[11px] font-bold text-stone-700 dark:text-stone-300 uppercase tracking-widest">
+                    SyncWaveBot Companion
+                  </h4>
+                  <p className="text-[11px] text-stone-500 leading-relaxed">
+                    Control this lobby&apos;s media streams directly from Telegram chats or groups using <b>SyncWaveBot</b>.
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-3.5 pt-1">
+                    {/* Open Telegram */}
+                    <a
+                      href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer shadow-md shadow-sky-500/10 text-center"
+                    >
+                      <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                        <path d="M11.944 0C5.337 0 0 5.337 0 11.944c0 6.607 5.337 11.944 11.944 11.944 6.608 0 11.944-5.337 11.944-11.944C23.888 5.337 18.552 0 11.944 0zm5.556 8.3c-.172 1.812-.924 6.25-1.306 8.3-.162.868-.482 1.16-.792 1.188-.674.062-1.186-.445-1.838-.872-1.02-.668-1.597-1.082-2.587-1.734-1.144-.754-.402-1.168.25-1.844.17-.176 3.128-2.87 3.185-3.11.007-.031.014-.146-.055-.207-.068-.061-.169-.04-.242-.024-.104.024-1.764 1.12-5.0 3.31-.474.326-.88.487-1.218.479-.373-.008-1.089-.21-1.623-.383-.654-.213-1.174-.326-1.129-.688.023-.189.283-.382.78-.58 3.048-1.326 5.08-2.204 6.095-2.636 2.9-.1.233.1.65.114.925.1.018.232.042.483-.021.233-.062.518-.211.758-.415.24-.204.288-.475.253-.781-.035-.306-.217-.43-.45-.48z"/>
+                      </svg>
+                      <span>Link SyncWaveBot</span>
+                    </a>
+
+                    {/* Share via Telegram */}
+                    <a
+                      href={`https://t.me/share/url?url=${encodeURIComponent(typeof window !== 'undefined' ? window.location.href : '')}&text=${encodeURIComponent(`Join my SyncWave room "${room?.name || 'Lounge'}" and let's listen to streams together in zero lag!`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400 text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer border border-sky-500/20 text-center"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Share on Telegram</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Floating Animated Toast Notifications (BUG 6) */}
       <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] flex flex-col gap-2 max-w-sm w-full px-4 pointer-events-none">
