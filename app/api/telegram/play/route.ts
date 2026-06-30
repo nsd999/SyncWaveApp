@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findRoomBySlug, addMediaToQueue } from '@/lib/telegram/db';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   try {
     const { slug, media_url, title, added_by_name } = await req.json();

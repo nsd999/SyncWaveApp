@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabase } from '@/lib/supabase';
+import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Lock } from 'lucide-react';
 
@@ -32,10 +33,21 @@ export default function ResetPasswordPage() {
 
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Prevent duplicate requests
+    if (submitting) return;
+
     if (!password) {
       setErrorMsg('Please specify a typing replacement password.');
       return;
     }
+
+    // Client-side password length check (Supabase default is 6)
+    if (password.length < 6) {
+      setErrorMsg('Your password should be at least 6 characters long.');
+      return;
+    }
+
     if (password !== confirmPassword) {
       setErrorMsg('Passwords do not match. Review character structures.');
       return;
@@ -81,9 +93,8 @@ export default function ResetPasswordPage() {
         router.replace('/dashboard');
       }, 1200);
     } catch (err: any) {
-      const message = err.message || 'Error executing credential update transaction.';
-      writeLog('error', 'Password reset', `Aborted password change: ${message}`);
-      setErrorMsg(message);
+      writeLog('error', 'Password reset', `Aborted password change: ${err.message || err}`);
+      setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
   };

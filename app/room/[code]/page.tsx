@@ -1630,10 +1630,14 @@ export default function RoomPage() {
           // Fetch current media queue
           PlaybackSyncService.fetchQueue(activeRoom.id).then((items) => {
             setQueue(items);
+          }).catch((err) => {
+            console.error('[SyncWave Core] Failed to fetch queue:', err);
           });
 
           setSyncStatusText('Real-time synchronization established.');
         }
+      }).catch((err) => {
+        console.error('[SyncWave Core] Playback initialization error:', err);
       });
 
       // Check current user situation
@@ -1697,6 +1701,11 @@ export default function RoomPage() {
                   setLoading(false);
                   writeLog('success', 'Lounge synced', `Guest recovered previous session as "${row.display_name}".`);
                 }
+              }).catch((err: any) => {
+                console.error('[SyncWave Join Debug] Failed to fetch guest member status:', err.message);
+                clearStoredGuestSession();
+                setShowJoinPrompt(true);
+                setLoading(false);
               });
           } else {
             console.error('[SyncWave Join Debug] Supabase client absent during guest session verification inside useEffect.');
@@ -1709,6 +1718,10 @@ export default function RoomPage() {
           setLoading(false);
         }
       }
+    }).catch((err: any) => {
+      console.error('[SyncWave Core] Handshake error during room loading:', err);
+      setInitError(err.message || 'Error occurred while establishing handshake.');
+      setLoading(false);
     });
 
   }, [roomCode, user, supabaseConnected, fetchRoomDetails, joinRoomAsRegisteredUser, getStoredGuestSession, clearStoredGuestSession]);

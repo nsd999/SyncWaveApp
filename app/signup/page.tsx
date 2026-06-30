@@ -4,6 +4,8 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabase } from '@/lib/supabase';
+import { getOrCreateProfile } from '@/lib/profile';
+import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { cleanBaseUsername } from '@/lib/username';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity, User } from 'lucide-react';
@@ -29,8 +31,25 @@ export default function SignupPage() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
+
+    // Prevent duplicate requests
+    if (submitting) return;
+
+    if (!email.trim() || !password) {
       setErrorMsg('Please specify both an email address and a strong password.');
+      return;
+    }
+
+    // Client-side email format check
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setErrorMsg('Please enter a valid email address.');
+      return;
+    }
+
+    // Client-side password length check (Supabase default is 6)
+    if (password.length < 6) {
+      setErrorMsg('Your password should be at least 6 characters long.');
       return;
     }
 
@@ -77,33 +96,47 @@ export default function SignupPage() {
       if (data?.user) {
         writeLog('success', 'Signup success', `Successfully registered in Supabase auth database: ${data.user.email}`);
 
-        const session = data.session;
-        if (session) {
-          setSuccessMsg('Account created! Your secure session has been established. Loading sandbox...');
-          setTimeout(() => {
-            const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-            if (pending) {
-              router.replace('/');
-            } else {
-              router.replace('/dashboard');
-            }
-          }, 1500);
-        } else {
-          setSuccessMsg(
-            'Registration successful! A verification email has been sent. Please confirm details via your email inbox links, then revisit our Sign In page.'
-          );
-          writeLog('info', 'Password recovery', `Email verification check outbound for ${email}`);
-          setEmail('');
-          setPassword('');
-          setDisplayName('');
+        setSuccessMsg('Initializing your SyncWave profile...');
+
+        try {
+          // Immediately establish the mandatory Profile row
+          const resolvedDisplay = displayName.trim() || email.split('@')[0] || 'New Member';
+          await getOrCreateProfile(data.user.id, data.user.email || '', resolvedDisplay);
+          writeLog('success', 'Profile created', `Profile successfully established for: ${data.user.id}`);
+
+          const session = data.session;
+          if (session) {
+            setSuccessMsg('Account created! Your secure session has been established. Loading sandbox...');
+            setTimeout(() => {
+              const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
+              if (pending) {
+                router.replace('/');
+              } else {
+                router.replace('/dashboard');
+              }
+            }, 1500);
+          } else {
+            // Note: If email confirmation is enabled on Supabase, a session won't be returned immediately.
+            setSuccessMsg(
+              'Registration successful! Please confirm your details via your email inbox verification link, then revisit our Sign In page.'
+            );
+            writeLog('info', 'Password recovery', `Email verification check outbound for ${email}`);
+            setEmail('');
+            setPassword('');
+            setDisplayName('');
+          }
+        } catch (profileErr: any) {
+          writeLog('error', 'Signup failure', `Profile creation constraint failed: ${profileErr.message}`);
+          // Sign out immediately to block partial registration success
+          await supabase.auth.signOut();
+          throw new Error(profileErr.message || 'We could not establish your user profile record.');
         }
       } else {
         throw new Error('No user metadata returned from database registries.');
       }
     } catch (err: any) {
-      const message = err.message || 'Verification rejected by database terminal namespaces.';
-      writeLog('error', 'Signup failure', `Signup sequence aborted: ${message}`);
-      setErrorMsg(message);
+      writeLog('error', 'Signup failure', `Signup sequence aborted: ${err.message || err}`);
+      setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
   };

@@ -4,6 +4,8 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabase } from '@/lib/supabase';
+import { getOrCreateProfile } from '@/lib/profile';
+import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity } from 'lucide-react';
 
@@ -25,8 +27,19 @@ export default function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
+    
+    // Prevent duplicate requests
+    if (submitting) return;
+
+    if (!email.trim() || !password) {
       setErrorMsg('Please specify both your email address and password credentials.');
+      return;
+    }
+
+    // Client-side email format check
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setErrorMsg('Please enter a valid email address.');
       return;
     }
 
@@ -67,24 +80,36 @@ export default function LoginPage() {
 
       if (data?.user) {
         writeLog('success', 'Login success', `Confirmed security signature for identity: ${data.user.email}`);
-        setSuccessMsg('Access approved. Redirecting to your Wave Dashboard...');
         
-        // Let local storage token write set and redirect
-        setTimeout(() => {
-          const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-          if (pending) {
-            router.replace('/');
-          } else {
-            router.replace('/dashboard');
-          }
-        }, 800);
+        // Ensure user's profile database row is successfully retrieved/created before considering login successful
+        setSuccessMsg('Verifying your user profile...');
+        
+        try {
+          await getOrCreateProfile(data.user.id, data.user.email || '');
+          writeLog('success', 'Profile loaded', `Verified and synchronized database profile for: ${data.user.id}`);
+          setSuccessMsg('Access approved. Redirecting to your Wave Dashboard...');
+          
+          // Let local storage token write set and redirect
+          setTimeout(() => {
+            const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
+            if (pending) {
+              router.replace('/');
+            } else {
+              router.replace('/dashboard');
+            }
+          }, 800);
+        } catch (profileErr: any) {
+          writeLog('error', 'Login failure', `Profile constraint failed: ${profileErr.message}`);
+          // Do not allow authentication to succeed without a valid profile record! Sign them out!
+          await supabase.auth.signOut();
+          throw new Error(profileErr.message || 'We could not load your user profile record.');
+        }
       } else {
         throw new Error('No user context returned from session handshakes.');
       }
     } catch (err: any) {
-      const message = err.message || 'Verification rejected by authorization terminal.';
-      writeLog('error', 'Login failure', `Login transaction aborted: ${message}`);
-      setErrorMsg(message);
+      writeLog('error', 'Login failure', `Login transaction aborted: ${err.message || err}`);
+      setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
   };

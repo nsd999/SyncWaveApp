@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findRoomBySlug, updatePlaybackState } from '@/lib/telegram/db';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   try {
     const { slug } = await req.json();

@@ -3,6 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { getSupabase } from '@/lib/supabase';
+import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Mail, ShieldAlert, CheckCircle, ArrowRight, Loader2, Key } from 'lucide-react';
 
@@ -14,8 +15,19 @@ export default function ForgotPasswordPage() {
 
   const handleResetRequest = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) {
+
+    // Prevent duplicate requests
+    if (submitting) return;
+
+    if (!email.trim()) {
       setErrorMsg('Please specify your registered email address.');
+      return;
+    }
+
+    // Client-side email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setErrorMsg('Please enter a valid email address.');
       return;
     }
 
@@ -60,9 +72,8 @@ export default function ForgotPasswordPage() {
       setSuccessMsg('Reset invitation dispatched! Please check your email inbox for a link to establish a new password.');
       setEmail('');
     } catch (err: any) {
-      const message = err.message || 'Error occurred dispatching reset instructions.';
-      writeLog('error', 'Password reset', `Dispatches reset failed: ${message}`);
-      setErrorMsg(message);
+      writeLog('error', 'Password reset', `Dispatches reset failed: ${err.message || err}`);
+      setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
   };

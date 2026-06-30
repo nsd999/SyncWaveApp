@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findRoomBySlug, linkChatToRoom } from '@/lib/telegram/db';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   try {
     const { slug, telegram_chat_id, telegram_user_id } = await req.json();

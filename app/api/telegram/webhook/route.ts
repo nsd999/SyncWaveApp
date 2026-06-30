@@ -21,6 +21,8 @@ import {
   getStandardCompanionButtons 
 } from '@/lib/telegram/bot';
 
+export const dynamic = 'force-dynamic';
+
 // Helper to format time in MM:SS
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '0:00';
