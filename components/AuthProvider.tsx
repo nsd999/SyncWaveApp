@@ -103,6 +103,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   React.useEffect(() => {
+    // --- STEP 5 DIAGNOSTIC PRINT ---
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'undefined';
+    const match = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.(co|net)/);
+    const projectRef = match ? match[1] : 'unknown';
+    const env = process.env.NODE_ENV || 'development';
+
+    console.log('=== [SyncWave Step 5 Trace: Environment Verification] ===');
+    console.log('Project Reference:', projectRef);
+    console.log('Supabase URL:', supabaseUrl);
+    console.log('Environment:', env);
+    console.log('========================================================');
+
     if (!configured) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);

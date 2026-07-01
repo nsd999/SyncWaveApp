@@ -32,6 +32,16 @@ import { useTheme } from 'next-themes';
 
 export const dynamic = 'force-dynamic';
 
+function getProjectRef(url: string | undefined): string {
+  if (!url) return 'undefined';
+  try {
+    const match = url.match(/https:\/\/([^.]+)\.supabase\.(co|net)/);
+    return match ? match[1] : 'unknown';
+  } catch (e) {
+    return 'error-parsing';
+  }
+}
+
 export default function Home() {
   const router = useRouter();
   const { user, profile, loading, signOut } = useAuth();
@@ -162,30 +172,96 @@ export default function Home() {
         .select()
         .single();
 
+      // --- STEP 1 DIAGNOSTIC PRINT ---
+      const supabaseUrlForTrace = process.env.NEXT_PUBLIC_SUPABASE_URL || 'undefined';
+      const projectRefForTrace = getProjectRef(supabaseUrlForTrace);
+      
+      console.log('=== [SyncWave Step 1 Trace: Room Creation] ===');
+      console.log('Room UUID:', newRoom?.id || 'undefined');
+      console.log('Room Slug:', activeCode);
+      console.log('Supabase URL:', supabaseUrlForTrace);
+      console.log('Project Reference:', projectRefForTrace);
+      console.log('Insert Response:', JSON.stringify(newRoom, null, 2));
+      console.log('Insert Error:', JSON.stringify(roomError, null, 2));
+
+      // Query right back immediately
+      const { data: reQueryRow, error: reQueryError } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('slug', activeCode)
+        .maybeSingle();
+
+      console.log('Immediate query [slug=' + activeCode + '] row count:', reQueryRow ? 1 : 0);
+      console.log('Immediate query [slug=' + activeCode + '] row:', JSON.stringify(reQueryRow, null, 2));
+      console.log('Immediate query [slug=' + activeCode + '] error:', JSON.stringify(reQueryError, null, 2));
+      console.log('=============================================');
+
       if (roomError || !newRoom) {
         throw new Error(roomError?.message || 'Host room database insertion failed.');
       }
 
-      // Rule 4: room_members insert succeeded
-      const { data: newMember, error: memberError } = await supabase
-        .from('room_members')
-        .insert({
-          room_id: (newRoom as any).id,
-          user_id: user.id,
-          display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host'
-        } as any)
-        .select()
-        .single();
+      // Rollback guard for inner transactions
+      try {
+        // 1. Immediately verify that the room exists
+        const { data: verifiedRoom, error: verifyError } = await supabase
+          .from('rooms')
+          .select('*')
+          .eq('id', newRoom.id)
+          .single();
 
-      if (memberError || !newMember) {
-        throw new Error(memberError?.message || 'Lounge host membership registration failed in the database.');
+        if (verifyError || !verifiedRoom) {
+          throw new Error('Room existence verification failed right after insertion.');
+        }
+
+        // 2. Insert the host into room_members
+        const { data: newMember, error: memberError } = await supabase
+          .from('room_members')
+          .insert({
+            room_id: newRoom.id,
+            user_id: user.id,
+            display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host'
+          } as any)
+          .select()
+          .single();
+
+        if (memberError || !newMember) {
+          throw new Error(memberError?.message || 'Lounge host membership registration failed in the database.');
+        }
+
+        // 3. Create the initial playback_state
+        const defaultState = {
+          room_id: newRoom.id,
+          media_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+          media_type: 'video',
+          is_playing: false,
+          current_time: 0,
+          duration: 596, // Approximate duration of BigBuckBunny.mp4 (596 seconds)
+          playback_rate: 1,
+          last_sync_at: new Date().toISOString()
+        };
+
+        const { error: playbackError } = await supabase
+          .from('playback_state')
+          .insert(defaultState as any);
+
+        if (playbackError) {
+          throw new Error(playbackError.message || 'Initial playback state registration failed.');
+        }
+
+        // 4. Subscribe the room to Realtime
+        const channel = supabase.channel(`syncwave-realtime-room-${newRoom.id}`);
+        await channel.subscribe();
+
+        writeLog('success', 'Lounge synced', `Successfully generated Sound Lounge "${createName}" [${activeCode}]`);
+        
+        // Close modal & route user to lounge screen
+        setShowCreateModal(false);
+        router.push(`/room/${activeCode}`);
+      } catch (innerErr: any) {
+        console.warn('[SyncWave Rollback] Deleting partially-created room:', newRoom.id);
+        await supabase.from('rooms').delete().eq('id', newRoom.id);
+        throw innerErr;
       }
-
-      writeLog('success', 'Lounge synced', `Successfully generated Sound Lounge "${createName}" [${activeCode}]`);
-      
-      // Close modal & route user to lounge screen
-      setShowCreateModal(false);
-      router.push(`/room/${activeCode}`);
     } catch (err: any) {
       console.error('Failed to instantiate room:', err);
       setCreateError(err.message || 'Error occurred while creating lounge session.');
@@ -214,11 +290,18 @@ export default function Home() {
     }
 
     try {
-      // Temporary logging for join diagnostics (BUG 1)
-      console.log('Entered code:', joinCode);
-      console.log('Normalized code:', formattedCode);
-      console.log('Column searched:', 'slug');
-      console.log('Supabase query:', `supabase.from("rooms").select("*").eq("slug", "${formattedCode}").single()`);
+      // --- STEP 2 DIAGNOSTIC PRINT ---
+      const supabaseUrlStep2 = process.env.NEXT_PUBLIC_SUPABASE_URL || 'undefined';
+      const projectRefStep2 = getProjectRef(supabaseUrlStep2);
+      const anonKeyPrefix = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.substring(0, 15) : 'undefined';
+
+      console.log('=== [SyncWave Step 2 Trace: Pre-Join/Redirect Device Info] ===');
+      console.log('NEXT_PUBLIC_SUPABASE_URL:', supabaseUrlStep2);
+      console.log('Project Reference:', projectRefStep2);
+      console.log('Anon Key prefix:', anonKeyPrefix);
+      console.log('Room Code:', joinCode);
+      console.log('Normalized Room Code:', formattedCode);
+      console.log('===============================================================');
 
       // 1. Verify if room exists in active database registries using the exact requested query pattern
       const { data: roomMatch, error: selectError } = await supabase
@@ -227,7 +310,6 @@ export default function Home() {
         .eq("slug", formattedCode)
         .single();
 
-      console.log('Returned rows count:', roomMatch ? 1 : 0);
       if (selectError && selectError.code !== 'PGRST116') {
         console.error('[SyncWave Join Debug] Supabase query error:', selectError.message);
       }
@@ -240,6 +322,25 @@ export default function Home() {
       }
 
       if (!roomMatch) {
+        // --- STEP 6 DIAGNOSTIC PRINT ---
+        console.log('=== [SyncWave Step 6 Trace: Room Not Found Query Result] ===');
+        console.log(JSON.stringify({
+          roomCode: joinCode,
+          normalizedCode: formattedCode,
+          supabaseUrl: supabaseUrlStep2,
+          projectRef: projectRefStep2,
+          query: `SELECT * FROM rooms WHERE slug = '${formattedCode}'`,
+          rowsReturned: 0,
+          roomObject: null,
+          error: selectError ? {
+            code: selectError.code,
+            message: selectError.message,
+            details: selectError.details,
+            hint: selectError.hint
+          } : null
+        }, null, 2));
+        console.log('============================================================');
+
         showToast("👀 We couldn't find that lounge.\nDouble-check the code or ask your friend for a fresh invite.", "error");
         writeLog('error', 'Lounge synced', `Lounge code "${formattedCode}" is inactive or missing.`);
         setJoiningRoom(false);
