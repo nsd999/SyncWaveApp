@@ -516,6 +516,18 @@ export default function RoomPage() {
         }
         
         console.log('[SyncWave Join Debug] Membership created successfully:', joinedRow);
+
+        // Rigorous runtime verification assertion to verify that the member row actually exists in the database
+        const { data: verifiedUserMember, error: verifyUserMemberError } = await supabase
+          .from('room_members')
+          .select('*')
+          .eq('id', joinedRow.id)
+          .single();
+
+        if (verifyUserMemberError || !verifiedUserMember) {
+          throw new Error('Database verification failed: User room member row was inserted, but subsequent query returned nothing.');
+        }
+
         setCurrentMember(joinedRow);
         writeLog('success', 'Lounge synced', `Registered user @${userProfile.username} entered the room session.`);
       }
@@ -605,6 +617,17 @@ export default function RoomPage() {
       }
 
       console.log('[SyncWave Join Debug] Guest registered successfully in room_members:', row);
+
+      // Rigorous runtime verification assertion to verify that the guest member row actually exists in the database
+      const { data: verifiedGuestMember, error: verifyGuestMemberError } = await supabase
+        .from('room_members')
+        .select('*')
+        .eq('id', row.id)
+        .single();
+
+      if (verifyGuestMemberError || !verifiedGuestMember) {
+        throw new Error('Database verification failed: Guest room member row was inserted, but subsequent query returned nothing.');
+      }
 
       // Persist credentials locally for recovery on refresh
       setStoredGuestSession(guestId, safeName, sessionId);
@@ -1648,6 +1671,11 @@ export default function RoomPage() {
           return;
         }
 
+        // Rigorous runtime verification assertion to confirm that room discovery succeeds and matches requested slug
+        if (roomData.slug.toUpperCase() !== roomCode.toUpperCase()) {
+          throw new Error(`Database integrity error: Searched room code ${roomCode} but database returned slug ${roomData.slug}.`);
+        }
+
         setRoom(roomData);
 
         // Resolve current participant
@@ -1671,11 +1699,18 @@ export default function RoomPage() {
               clearStoredGuestSession();
               setShowJoinPrompt(true);
               setLoading(false);
-            } else if (memberRow.is_banned) {
-              setIsBanned(true);
-              setLoading(false);
             } else {
-              setCurrentMember(memberRow);
+              // Rigorous runtime verification assertion for guest identifier
+              if (memberRow.guest_id !== stored.guestId) {
+                throw new Error('Database verification mismatch: Member guest_id does not match stored guest ID.');
+              }
+
+              if (memberRow.is_banned) {
+                setIsBanned(true);
+                setLoading(false);
+              } else {
+                setCurrentMember(memberRow);
+              }
             }
           } else {
             console.log('[SyncWave Join Debug] No local session found, prompting display name.');

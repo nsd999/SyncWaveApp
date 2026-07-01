@@ -150,12 +150,16 @@ export default function Home() {
 
       const code = generateRoomCode();
       
-      // Slug collision check
-      const { data: conflict } = await supabase
+      // Slug collision check with verification
+      const { data: conflict, error: conflictError } = await supabase
         .from('rooms')
         .select('id')
         .eq('slug', code)
         .maybeSingle();
+
+      if (conflictError) {
+        throw new Error(`Database error during slug collision check: ${conflictError.message}`);
+      }
 
       const activeCode = conflict ? generateRoomCode() : code;
 
@@ -184,7 +188,11 @@ export default function Home() {
       console.log('Insert Response:', JSON.stringify(newRoom, null, 2));
       console.log('Insert Error:', JSON.stringify(roomError, null, 2));
 
-      // Query right back immediately
+      if (roomError || !newRoom) {
+        throw new Error(roomError?.message || 'Host room database insertion failed.');
+      }
+
+      // Query right back immediately to verify that the room exists and is discoverable by its slug
       const { data: reQueryRow, error: reQueryError } = await supabase
         .from('rooms')
         .select('*')
@@ -196,13 +204,13 @@ export default function Home() {
       console.log('Immediate query [slug=' + activeCode + '] error:', JSON.stringify(reQueryError, null, 2));
       console.log('=============================================');
 
-      if (roomError || !newRoom) {
-        throw new Error(roomError?.message || 'Host room database insertion failed.');
+      if (reQueryError || !reQueryRow) {
+        throw new Error('Database discovery check failed: Room was inserted, but immediately querying it by its slug returned nothing. Check RLS or database replication status.');
       }
 
       // Rollback guard for inner transactions
       try {
-        // 1. Immediately verify that the room exists
+        // 1. Double verify that the room exists by its primary key (ID)
         const { data: verifiedRoom, error: verifyError } = await supabase
           .from('rooms')
           .select('*')
@@ -210,7 +218,7 @@ export default function Home() {
           .single();
 
         if (verifyError || !verifiedRoom) {
-          throw new Error('Room existence verification failed right after insertion.');
+          throw new Error('Room existence verification by ID failed right after insertion.');
         }
 
         // 2. Insert the host into room_members
@@ -226,6 +234,17 @@ export default function Home() {
 
         if (memberError || !newMember) {
           throw new Error(memberError?.message || 'Lounge host membership registration failed in the database.');
+        }
+
+        // Verify that the host membership actually exists in the database
+        const { data: verifiedMember, error: verifyMemberError } = await supabase
+          .from('room_members')
+          .select('*')
+          .eq('id', newMember.id)
+          .single();
+
+        if (verifyMemberError || !verifiedMember) {
+          throw new Error('Database verification failed: Host member row was inserted, but query returned nothing.');
         }
 
         // 3. Create the initial playback_state
@@ -246,6 +265,17 @@ export default function Home() {
 
         if (playbackError) {
           throw new Error(playbackError.message || 'Initial playback state registration failed.');
+        }
+
+        // Verify that playback_state actually exists
+        const { data: verifiedState, error: verifyStateError } = await supabase
+          .from('playback_state')
+          .select('*')
+          .eq('room_id', newRoom.id)
+          .single();
+
+        if (verifyStateError || !verifiedState) {
+          throw new Error('Database verification failed: Initial playback state was inserted, but query returned nothing.');
         }
 
         // 4. Subscribe the room to Realtime
