@@ -4,7 +4,7 @@
  */
 export function getFriendlyErrorMessage(err: any): string {
   if (!err) {
-    return "Something went wrong. Please try again.";
+    return "Our Servers just F**ked up!. Please try again later.";
   }
   
   const rawMessage = err.message || String(err);
