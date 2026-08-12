@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
-import { db, isFirebaseConfigured } from '@/lib/firebase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 import { getUniqueGuestName, Room, RoomMember } from '@/lib/room';
@@ -230,7 +230,7 @@ export default function RoomPage() {
   const ytPlayerRef = React.useRef<any>(null);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
 
-  const firebaseConnected = isFirebaseConfigured();
+  const supabaseConnected = isSupabaseConfigured();
 
   // Load guest credentials from localStorage on component mount (client-safe)
   const getStoredGuestSession = React.useCallback(() => {
@@ -260,20 +260,17 @@ export default function RoomPage() {
   }, [roomCode]);
 
   const fetchRoomDetails = React.useCallback(async () => {
-    if (!firebaseConnected || !roomCode) return;
+    if (!supabaseConnected || !roomCode) return;
     try {
-      const { collection, query, where, getDocs } = await import('firebase/firestore');
-      const q = query(collection(db, 'rooms'), where('slug', '==', roomCode));
-      const snap = await getDocs(q);
+      const { data: d, error } = await supabase.from('rooms').select('*').eq('slug', roomCode).single();
 
-      if (snap.empty) {
+      if (error || !d) {
         setRoom(null);
         setLoading(false);
         return;
       }
 
-      const d = snap.docs[0];
-      const roomData = { id: d.id, ...d.data() } as Room;
+      const roomData = d as Room;
       setRoom(roomData);
       return roomData;
     } catch (e: any) {
@@ -281,19 +278,21 @@ export default function RoomPage() {
       setInitError(e.message || 'Error occurred while loading room data.');
       setLoading(false);
     }
-  }, [roomCode, firebaseConnected]);
+  }, [roomCode, supabaseConnected]);
 
   // Sync / join room membership
   const joinRoomAsRegisteredUser = React.useCallback(async (roomId: string, userId: string, userEmail: string) => {
     try {
-      const { collection, query, where, getDocs, addDoc } = await import('firebase/firestore');
       const userProfile = await getOrCreateProfile(userId, userEmail);
 
-      const q = query(collection(db, 'room_members'), where('room_id', '==', roomId), where('user_id', '==', userId));
-      const snap = await getDocs(q);
+      const { data: existingMembers, error } = await supabase
+        .from('room_members')
+        .select('*')
+        .eq('room_id', roomId)
+        .eq('user_id', userId);
 
-      if (!snap.empty) {
-        const memberData = { id: snap.docs[0].id, ...snap.docs[0].data() } as RoomMember;
+      if (existingMembers && existingMembers.length > 0) {
+        const memberData = existingMembers[0] as RoomMember;
         if (memberData.is_banned) {
           setIsBanned(true);
           return;
@@ -309,9 +308,10 @@ export default function RoomPage() {
           is_banned: false,
           joined_at: new Date().toISOString()
         };
-        const docRef = await addDoc(collection(db, 'room_members'), newMember);
-        const joinedRow = { id: docRef.id, ...newMember } as RoomMember;
-        setCurrentMember(joinedRow);
+        const { data: docRef, error: insertError } = await supabase.from('room_members').insert([newMember]).select().single();
+        if (insertError) throw insertError;
+        
+        setCurrentMember(docRef as RoomMember);
         writeLog('success', 'Lounge synced', `Registered user @${userProfile.username} entered the room session.`);
       }
     } catch (err: any) {
@@ -329,17 +329,21 @@ export default function RoomPage() {
     setGuestError(null);
 
     try {
-      const { collection, query, where, getDocs, addDoc } = await import('firebase/firestore');
       const trimmedName = guestNameInput.trim();
       const safeName = await getUniqueGuestName(room.id, trimmedName);
 
-      const checkQ = query(collection(db, 'room_members'), where('room_id', '==', room.id), where('display_name', '==', safeName));
-      const checkSnap = await getDocs(checkQ);
+      const { data: checkSnap, error: checkError } = await supabase
+        .from('room_members')
+        .select('is_banned')
+        .eq('room_id', room.id)
+        .eq('display_name', safeName);
 
       let isBannedMatch = false;
-      checkSnap.forEach((d) => {
-        if (d.data().is_banned) isBannedMatch = true;
-      });
+      if (checkSnap) {
+        checkSnap.forEach((d: any) => {
+          if (d.is_banned) isBannedMatch = true;
+        });
+      }
 
       if (isBannedMatch) {
         setIsBanned(true);
@@ -361,8 +365,9 @@ export default function RoomPage() {
         joined_at: new Date().toISOString()
       };
 
-      const docRef = await addDoc(collection(db, 'room_members'), newGuest);
-      const row = { id: docRef.id, ...newGuest } as RoomMember;
+      const { data: docRef, error: insertError } = await supabase.from('room_members').insert([newGuest]).select().single();
+      if (insertError) throw insertError;
+      const row = docRef as RoomMember;
 
       setStoredGuestSession(guestId, safeName, sessionId);
       setCurrentMember(row);
@@ -376,13 +381,11 @@ export default function RoomPage() {
     }
   };
 
-  // Leave room logic
   const leaveRoom = React.useCallback(async () => {
-    if (!firebaseConnected || !currentMember || !room) return;
+    if (!supabaseConnected || !currentMember || !room) return;
 
     try {
-      const { doc, deleteDoc } = await import('firebase/firestore');
-      await deleteDoc(doc(db, 'room_members', currentMember.id));
+      await supabase.from('room_members').delete().eq('id', currentMember.id);
       clearStoredGuestSession();
       setCurrentMember(null);
       router.replace(user ? '/dashboard' : '/');
@@ -390,12 +393,12 @@ export default function RoomPage() {
       console.error('Failed to leave room cleanly:', err.message);
       router.replace(user ? '/dashboard' : '/');
     }
-  }, [currentMember, room, router, user, firebaseConnected, clearStoredGuestSession]);
+  }, [currentMember, room, router, user, supabaseConnected, clearStoredGuestSession]);
 
   // Send visual message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!typedMessage.trim() || !currentMember || !room || !firebaseConnected) return;
+    if (!typedMessage.trim() || !currentMember || !room || !supabaseConnected) return;
 
     if (currentMember.is_muted) {
       writeLog('warn', 'Chat blocker', `Muted participant attempt to post chat dismissed.`);
@@ -406,58 +409,51 @@ export default function RoomPage() {
     setTypedMessage('');
 
     try {
-      const { collection, addDoc } = await import('firebase/firestore');
       const senderId = currentMember.user_id || currentMember.guest_id || 'anonymous';
-      await addDoc(collection(db, 'messages'), {
+      await supabase.from('messages').insert([{
         room_id: room.id,
         sender_id: senderId,
         content: currentText,
         created_at: new Date().toISOString()
-      });
+      }]);
     } catch (err: any) {
       console.error('[Room Chat] Message delivery failed:', err.message);
     }
   };
 
-  // Host Controls: Mute Member
   const toggleMuteMember = async (memberId: string, currentMuteState: boolean) => {
-    if (!room || !currentMember || !firebaseConnected) return;
-    if (room.host_id !== user?.uid) return;
+    if (!room || !currentMember || !supabaseConnected) return;
+    if (room.host_id !== user?.id) return;
 
     try {
-      const { doc, updateDoc } = await import('firebase/firestore');
-      await updateDoc(doc(db, 'room_members', memberId), { is_muted: !currentMuteState });
+      await supabase.from('room_members').update({ is_muted: !currentMuteState }).eq('id', memberId);
       writeLog('info', 'Security block', `Participant mute toggled to ${!currentMuteState} by Host.`);
     } catch (err: any) {
       console.error('Host control update failed:', err);
     }
   };
 
-  // Host Controls: Kick Member
   const kickMember = async (memberId: string, displayName: string) => {
-    if (!room || !currentMember || !firebaseConnected) return;
-    if (room.host_id !== user?.uid) return;
+    if (!room || !currentMember || !supabaseConnected) return;
+    if (room.host_id !== user?.id) return;
 
     try {
-      const { doc, deleteDoc } = await import('firebase/firestore');
-      await deleteDoc(doc(db, 'room_members', memberId));
+      await supabase.from('room_members').delete().eq('id', memberId);
       writeLog('success', 'Security block', `Host kicked participant "${displayName}" from the session.`);
     } catch (err: any) {
       console.error('Kick execution rejected:', err.message);
     }
   };
 
-  // Host Controls: Ban Member
   const banMember = async (memberId: string, displayName: string) => {
-    if (!room || !currentMember || !firebaseConnected) return;
-    if (room.host_id !== user?.uid) {
+    if (!room || !currentMember || !supabaseConnected) return;
+    if (room.host_id !== user?.id) {
       writeLog('error', 'Security block', 'Unauthorized ban request received.');
       return;
     }
 
     try {
-      const { doc, updateDoc } = await import('firebase/firestore');
-      await updateDoc(doc(db, 'room_members', memberId), { is_banned: true });
+      await supabase.from('room_members').update({ is_banned: true }).eq('id', memberId);
       writeLog('success', 'Security block', `Host banned participant "${displayName}".`);
     } catch (err: any) {
       console.error('Ban execution rejected:', err.message);
