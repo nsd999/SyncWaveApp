@@ -2,7 +2,8 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { getSupabase } from '@/lib/supabase';
+import { auth, isFirebaseConfigured } from '@/lib/firebase';
+import { sendPasswordResetEmail } from 'firebase/auth';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Mail, ShieldAlert, CheckCircle, ArrowRight, Loader2, Key } from 'lucide-react';
@@ -15,8 +16,6 @@ export default function ForgotPasswordPage() {
 
   const handleResetRequest = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Prevent duplicate requests
     if (submitting) return;
 
     if (!email.trim()) {
@@ -24,7 +23,6 @@ export default function ForgotPasswordPage() {
       return;
     }
 
-    // Client-side email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email.trim())) {
       setErrorMsg('Please enter a valid email address.');
@@ -37,42 +35,19 @@ export default function ForgotPasswordPage() {
 
     writeLog('info', 'Password recovery', `Sending password reset challenge to: ${email}`);
 
-    const supabase = getSupabase();
-    if (!supabase) {
-      setErrorMsg('Supabase client failed to resolve. Check configuration variables.');
+    if (!isFirebaseConfigured()) {
+      setErrorMsg('Firebase engine is unconfigured.');
       setSubmitting(false);
       return;
     }
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Password recovery token request exceeded the 15-second safety timeout.'));
-      }, 15000);
-      if (timer && typeof timer.unref === 'function') {
-        timer.unref();
-      }
-    });
-
-    // Resolve redirection endpoint url context
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-    const redirectUrl = `${origin}/reset-password`;
-
-    const actionPromise = supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: redirectUrl,
-    });
-
     try {
-      const { data, error } = await Promise.race([actionPromise, timeoutPromise]);
-
-      if (error) {
-        throw error;
-      }
-
+      await sendPasswordResetEmail(auth, email.trim());
       writeLog('success', 'Password recovery', `Successfully dispatched password reset endpoint for user: ${email}`);
       setSuccessMsg('Reset invitation dispatched! Please check your email inbox for a link to establish a new password.');
       setEmail('');
     } catch (err: any) {
-      writeLog('error', 'Password reset', `Dispatches reset failed: ${err.message || err}`);
+      writeLog('error', 'Password reset', `Dispatch reset failed: ${err.message || err}`);
       setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
@@ -81,8 +56,6 @@ export default function ForgotPasswordPage() {
   return (
     <div id="forgot-password-viewport" className="min-h-screen flex items-center justify-center p-4 bg-stone-50 select-none">
       <div id="forgot-password-card" className="w-full max-w-md bg-white border border-stone-200/80 rounded-2xl shadow-xl shadow-stone-100 p-6 md:p-8 flex flex-col space-y-6">
-        
-        {/* Crest branding */}
         <div id="forgot-password-brand" className="space-y-1.5 text-center">
           <div className="mx-auto bg-stone-900 text-stone-50 w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-stone-200 border border-stone-800">
             <Key className="w-5 h-5 text-amber-400 rotate-90 animate-pulse" />
@@ -91,19 +64,12 @@ export default function ForgotPasswordPage() {
           <p className="text-xs text-stone-500 font-mono">Phase 1 Password Reset Dispatcher</p>
         </div>
 
-        {/* Message Callouts */}
         {errorMsg && (
           <div id="forgot-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-semibold text-rose-900">Dispatch Error</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
-              <button 
-                onClick={handleResetRequest}
-                className="mt-2 text-[11px] font-semibold text-rose-800 underline hover:text-rose-950 block transition"
-              >
-                Retry Dispatch
-              </button>
             </div>
           </div>
         )}
@@ -118,7 +84,6 @@ export default function ForgotPasswordPage() {
           </div>
         )}
 
-        {/* Action input */}
         {!successMsg && (
           <form id="forgot-form" onSubmit={handleResetRequest} className="space-y-4">
             <div className="space-y-1">
@@ -159,7 +124,6 @@ export default function ForgotPasswordPage() {
           </form>
         )}
 
-        {/* Footer Redirect links */}
         <div id="forgot-footer" className="text-center pt-2 border-t border-stone-100 italic">
           <p className="text-xs text-stone-500">
             Remembered your secrets?{' '}
@@ -171,7 +135,6 @@ export default function ForgotPasswordPage() {
             </Link>
           </p>
         </div>
-
       </div>
     </div>
   );

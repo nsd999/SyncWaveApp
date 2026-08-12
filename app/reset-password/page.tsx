@@ -3,7 +3,8 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getSupabase } from '@/lib/supabase';
+import { auth, isFirebaseConfigured } from '@/lib/firebase';
+import { updatePassword } from 'firebase/auth';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Lock } from 'lucide-react';
@@ -16,40 +17,28 @@ export default function ResetPasswordPage() {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
 
-  // Check if session exists (standard validation rule for reset paths)
   React.useEffect(() => {
-    const supabase = getSupabase();
-    if (!supabase) return;
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        writeLog('warn', 'Password recovery', 'Reset landing loaded without an active authenticated URL token session');
-        setErrorMsg('Authentication token not resolved. Please ensure you clicked the full link dispatched to your inbox.');
-      } else {
-        writeLog('info', 'Password recovery', `Authenticated reset gateway ready for identity: ${session.user.email}`);
-      }
-    });
+    if (!auth.currentUser) {
+      writeLog('warn', 'Password recovery', 'Reset landing loaded without active session');
+    }
   }, []);
 
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Prevent duplicate requests
     if (submitting) return;
 
     if (!password) {
-      setErrorMsg('Please specify a typing replacement password.');
+      setErrorMsg('Please specify a password.');
       return;
     }
 
-    // Client-side password length check (Supabase default is 6)
     if (password.length < 6) {
       setErrorMsg('Your password should be at least 6 characters long.');
       return;
     }
 
     if (password !== confirmPassword) {
-      setErrorMsg('Passwords do not match. Review character structures.');
+      setErrorMsg('Passwords do not match.');
       return;
     }
 
@@ -57,38 +46,16 @@ export default function ResetPasswordPage() {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    writeLog('info', 'Password reset', 'Attempting password change transaction');
-
-    const supabase = getSupabase();
-    if (!supabase) {
-      setErrorMsg('Supabase execution framework is currently unconfigured.');
+    if (!isFirebaseConfigured() || !auth.currentUser) {
+      setErrorMsg('Not logged in or Firebase unconfigured.');
       setSubmitting(false);
       return;
     }
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Password transaction timed out (15 second safety cutoff reached).'));
-      }, 15000);
-      if (timer && typeof timer.unref === 'function') {
-        timer.unref();
-      }
-    });
-
-    const actionPromise = supabase.auth.updateUser({
-      password: password,
-    });
-
     try {
-      const { data, error } = await Promise.race([actionPromise, timeoutPromise]);
-
-      if (error) {
-        throw error;
-      }
-
-      writeLog('success', 'Password reset', 'Successfully updated security credential password signatures');
-      setSuccessMsg('Your security password keys have been refreshed! Establishing handshake routes...');
-      
+      await updatePassword(auth.currentUser, password);
+      writeLog('success', 'Password reset', 'Successfully updated password');
+      setSuccessMsg('Your security password keys have been refreshed!');
       setTimeout(() => {
         router.replace('/dashboard');
       }, 1200);
@@ -102,8 +69,6 @@ export default function ResetPasswordPage() {
   return (
     <div id="reset-viewport" className="min-h-screen flex items-center justify-center p-4 bg-stone-50 select-none">
       <div id="reset-card" className="w-full max-w-md bg-white border border-stone-200/80 rounded-2xl shadow-xl shadow-stone-100 p-6 md:p-8 flex flex-col space-y-6">
-        
-        {/* Logo Crest */}
         <div id="reset-brand" className="space-y-1.5 text-center">
           <div className="mx-auto bg-stone-900 text-stone-50 w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-stone-200 border border-stone-800">
             <Lock className="w-5 h-5 text-amber-500 animate-pulse" />
@@ -112,19 +77,12 @@ export default function ResetPasswordPage() {
           <p className="text-xs text-stone-500 font-mono">Phase 1 Secure Credential Update</p>
         </div>
 
-        {/* Alerts */}
         {errorMsg && (
           <div id="reset-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-semibold text-rose-900">Handshake Warning</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
-              <button 
-                onClick={handlePasswordReset}
-                className="mt-2 text-[11px] font-semibold text-rose-800 underline hover:text-rose-950 block transition"
-              >
-                Retry Key Write
-              </button>
             </div>
           </div>
         )}
@@ -139,8 +97,7 @@ export default function ResetPasswordPage() {
           </div>
         )}
 
-        {/* Input keys */}
-        {(!successMsg && !errorMsg?.includes('Authentication token not resolved')) && (
+        {!successMsg && (
           <form id="reset-form" onSubmit={handlePasswordReset} className="space-y-4">
             <div className="space-y-1">
               <label className="text-[11px] font-mono uppercase tracking-wider text-stone-500 block">New Password</label>
@@ -198,7 +155,6 @@ export default function ResetPasswordPage() {
           </form>
         )}
 
-        {/* Footer */}
         <div id="reset-footer" className="text-center pt-2 border-t border-stone-100 flex justify-center space-x-4">
           <Link 
             href="/login" 
@@ -207,7 +163,6 @@ export default function ResetPasswordPage() {
             <span>Back to Login</span>
           </Link>
         </div>
-
       </div>
     </div>
   );

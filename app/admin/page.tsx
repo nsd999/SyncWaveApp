@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { updateProfile, getOrCreateProfile } from '@/lib/profile';
 import { writeLog, getLogs, clearLogs, LogEntry } from '@/lib/logger';
-import { getSupabase } from '@/lib/supabase';
+import { db, isFirebaseConfigured } from '@/lib/firebase';
+import { doc, deleteDoc } from 'firebase/firestore';
 import { 
   LogOut, 
   Terminal, 
@@ -35,18 +36,10 @@ export default function AdminPage() {
   const [successNotice, setSuccessNotice] = React.useState<string | null>(null);
   const [errorNotice, setErrorNotice] = React.useState<string | null>(null);
 
-  const supabaseConnected = React.useMemo(() => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    return !!(
-      supabaseUrl &&
-      supabaseAnonKey &&
-      !supabaseUrl.includes('your-project-id') &&
-      !supabaseAnonKey.includes('your-anon-key')
-    );
+  const firebaseConnected = React.useMemo(() => {
+    return isFirebaseConfigured();
   }, []);
 
-  // Reactive listener to capture stream logs in our dev terminal
   React.useEffect(() => {
     const handleLogsSync = () => {
       setLogs(getLogs());
@@ -57,33 +50,21 @@ export default function AdminPage() {
     return () => window.removeEventListener('syncwave-new-log', handleLogsSync);
   }, []);
 
-  // Profile auto-recovery simulation test
   const triggerDemoProfileRecoveryCheck = async () => {
     if (!user) return;
     
     writeLog('warn', 'Profile recovery', 'Simulating immediate profile recovery trigger test...');
-    const supabase = getSupabase();
-    if (!supabase) return;
+    if (!firebaseConnected) return;
 
     try {
-      // 1. Temporarily clear local profiles row in database
-      const { error: deletionError } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', user.id);
-
-      if (deletionError) {
-        throw new Error(`Profile table clearance warning: ${deletionError.message}`);
-      }
-
+      await deleteDoc(doc(db, 'profiles', user.uid));
       writeLog('info', 'Profile recovery', 'Database entry cleared temporarily for tester. Retrying recovery handshake...');
 
-      // 2. Fetch/trigger getOrCreateProfile immediately which handles missing entries
-      const recoveredProfile = await getOrCreateProfile(user.id, user.email || '');
+      const recoveredProfile = await getOrCreateProfile(user.uid, user.email || '');
       await refreshProfile();
       
       writeLog('success', 'Profile recovery', `Handshake verified successfully. Reconstituted profile username: "@${recoveredProfile.username}"`);
-      setSuccessNotice('Auto-recovery test completed! Row was deleted in Postgres & recreated instantly.');
+      setSuccessNotice('Auto-recovery test completed! Row was deleted & recreated instantly.');
       setTimeout(() => setSuccessNotice(null), 4000);
     } catch (err: any) {
       writeLog('error', 'Profile recovery', `Test loop failure: ${err.message}`);
@@ -91,7 +72,6 @@ export default function AdminPage() {
     }
   };
 
-  // Full System Integration verification suite
   const runSelfVerificationTests = async () => {
     setTesting(true);
     writeLog('info', 'Session refresh', 'Starting automated verification self-diagnostics checklist...');
@@ -150,7 +130,6 @@ export default function AdminPage() {
   return (
     <div id="admin-viewport" className="min-h-screen bg-stone-950 text-stone-100 select-none flex flex-col font-mono">
       
-      {/* Header */}
       <nav id="admin-nav" className="bg-stone-900 border-b border-stone-850 sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <button 
@@ -180,10 +159,8 @@ export default function AdminPage() {
         </div>
       </nav>
 
-      {/* Main Grid */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 md:px-8 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* Left column info & simulation */}
         <div className="lg:col-span-5 flex flex-col space-y-6">
           <div className="bg-stone-900 border border-stone-850 rounded-2xl p-6 shadow-2xl flex flex-col space-y-6">
             <h2 className="text-sm font-bold text-white border-b border-stone-800 pb-3 flex items-center gap-2">
@@ -207,16 +184,16 @@ export default function AdminPage() {
 
             <div className="space-y-4">
               <div>
-                <span className="text-stone-500 text-[10px] block uppercase">SUPABASE DATABASE STATE</span>
+                <span className="text-stone-500 text-[10px] block uppercase">FIREBASE DATABASE STATE</span>
                 <span className="text-xs font-semibold text-stone-200">
-                  {supabaseConnected ? (
+                  {firebaseConnected ? (
                     <span className="text-emerald-400 font-bold">CONNECTED (HEALTHY)</span>
                   ) : (
                     <span className="text-rose-450 font-bold">DISCONNECTED / INACTIVE</span>
                   )}
                 </span>
                 <div className="mt-1 text-[10px] text-stone-450 leading-relaxed">
-                  Postgres schema sync rules: active. Trigger state hook monitors `public.profiles` reference trees dynamically.
+                  Firestore rules: active. Trigger state hook monitors `profiles` collection dynamically.
                 </div>
               </div>
 
@@ -228,19 +205,18 @@ export default function AdminPage() {
               <div>
                 <span className="text-stone-500 text-[10px] block uppercase">USER UNIQUE IDENTIFIER</span>
                 <span className="text-[10.5px] text-purple-300 select-all block break-all font-bold">
-                  {user?.id || 'UNAUTHENTICATED'}
+                  {user?.uid || 'UNAUTHENTICATED'}
                 </span>
               </div>
             </div>
 
-            {/* Profile Auto-Recovery Live Trigger */}
             <div className="pt-4 border-t border-stone-800 space-y-3">
               <div className="flex justify-between items-center">
                 <h4 className="text-[10px] uppercase font-bold text-amber-500">Auto-Recovery System</h4>
                 <span className="h-2 w-2 bg-emerald-500 rounded-full animate-ping"></span>
               </div>
               <p className="text-[11px] text-stone-400 leading-normal">
-                Test the **Profile Auto-Recovery** system. This completely clears your public user profile database row and dynamically rebuilds and recovers it on the fly during authorization sync!
+                Test the **Profile Auto-Recovery** system. This clears your user profile document and dynamically rebuilds it on the fly!
               </p>
               <button
                 onClick={triggerDemoProfileRecoveryCheck}
@@ -253,10 +229,7 @@ export default function AdminPage() {
           </div>
         </div>
 
-        {/* Right column diagnostics terminal & test checklist */}
         <div className="lg:col-span-7 flex flex-col space-y-6">
-          
-          {/* Diagnostic tests */}
           <div className="bg-stone-900 border border-stone-850 rounded-2xl p-6 shadow-2xl flex flex-col space-y-5">
             <div className="flex justify-between items-center pb-3 border-b border-stone-800">
               <div className="flex items-center space-x-2">
@@ -286,7 +259,7 @@ export default function AdminPage() {
               </div>
 
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">Postgres Auth Handshake</span>
+                <span className="text-stone-400">Firebase Auth Handshake</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.login_auth === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.login_auth ? 'PASSED' : 'READY'}</span>
               </div>
 
@@ -312,7 +285,6 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* Terminal logger */}
           <div className="bg-stone-900 border border-stone-850 rounded-2xl p-6 shadow-2xl flex flex-col space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-stone-800">
               <div className="flex items-center space-x-2">
@@ -327,7 +299,6 @@ export default function AdminPage() {
               </button>
             </div>
 
-            {/* Terminal logs viewer */}
             <div className="h-56 overflow-y-auto font-mono text-[10px] space-y-2 leading-relaxed bg-stone-950 rounded-xl p-4 border border-stone-850 scrollbar-thin select-text">
               {logs.length === 0 ? (
                 <p className="text-stone-600 italic">No logs initialized yet. Use the system to populate diagnostics stream.</p>

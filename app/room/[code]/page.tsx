@@ -3,11 +3,10 @@
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
-import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { db, isFirebaseConfigured } from '@/lib/firebase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 import { getUniqueGuestName, Room, RoomMember } from '@/lib/room';
-import SupabaseSetupNeeded from '@/components/SupabaseSetupNeeded';
 import { 
   Users, 
   User as UserIcon, 
@@ -231,23 +230,16 @@ export default function RoomPage() {
   const ytPlayerRef = React.useRef<any>(null);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
 
-  const supabaseConnected = isSupabaseConfigured();
+  const firebaseConnected = isFirebaseConfigured();
 
   // Load guest credentials from localStorage on component mount (client-safe)
   const getStoredGuestSession = React.useCallback(() => {
     if (typeof window === 'undefined') return null;
     const data = localStorage.getItem(`syncwave-guest-${roomCode}`);
-    console.log('[SyncWave Session Debug] getStoredGuestSession read attempt:', {
-      key: `syncwave-guest-${roomCode}`,
-      exists: !!data
-    });
     if (data) {
       try {
-        const parsed = JSON.parse(data);
-        console.log('[SyncWave Session Debug] getStoredGuestSession parse success:', parsed);
-        return parsed;
+        return JSON.parse(data);
       } catch (e: any) {
-        console.error('[SyncWave Session Debug] getStoredGuestSession JSON parse error:', e.message);
         return null;
       }
     }
@@ -258,388 +250,127 @@ export default function RoomPage() {
   const setStoredGuestSession = React.useCallback((guestId: string, name: string, sessionId: string) => {
     if (typeof window === 'undefined') return;
     const payload = { guestId, displayName: name, sessionId };
-    console.log('[SyncWave Session Debug] setStoredGuestSession write:', {
-      key: `syncwave-guest-${roomCode}`,
-      payload
-    });
     localStorage.setItem(`syncwave-guest-${roomCode}`, JSON.stringify(payload));
   }, [roomCode]);
 
   // Remove guest credentials (client-safe)
   const clearStoredGuestSession = React.useCallback(() => {
     if (typeof window === 'undefined') return;
-    console.log('[SyncWave Session Debug] clearStoredGuestSession clear-out invoked:', {
-      key: `syncwave-guest-${roomCode}`
-    });
     localStorage.removeItem(`syncwave-guest-${roomCode}`);
   }, [roomCode]);
 
   const fetchRoomDetails = React.useCallback(async () => {
-    const supabase = getSupabase() as any;
-    if (!supabase || !roomCode) {
-      console.warn('[SyncWave Join Debug] Supabase client or roomCode missing on fetchRoomDetails:', { hasSupabase: !!supabase, roomCode });
-      return;
-    }
-
+    if (!firebaseConnected || !roomCode) return;
     try {
-      const getProjectRefLocal = (url: string | undefined): string => {
-        if (!url) return 'undefined';
-        try {
-          const match = url.match(/https:\/\/([^.]+)\.supabase\.(co|net)/);
-          return match ? match[1] : 'unknown';
-        } catch (e) {
-          return 'error-parsing';
-        }
-      };
+      const { collection, query, where, getDocs } = await import('firebase/firestore');
+      const q = query(collection(db, 'rooms'), where('slug', '==', roomCode));
+      const snap = await getDocs(q);
 
-      const supabaseUrlStep3 = process.env.NEXT_PUBLIC_SUPABASE_URL || 'undefined';
-      const projectRefStep3 = getProjectRefLocal(supabaseUrlStep3);
-
-      // Highly granular logging for room join diagnostics
-      console.log('Entered code:', roomCode);
-      console.log('Normalized code:', roomCode.toUpperCase());
-      console.log('Column searched:', 'slug');
-      console.log('Supabase query:', `supabase.from("rooms").select("*").eq("slug", "${roomCode}").single()`);
-
-      // 1. Fetch Room definition using exact single() pattern as expected
-      let { data: roomData, error: roomError } = await supabase
-        .from("rooms")
-        .select("*")
-        .eq("slug", roomCode)
-        .single();
-
-      const isNoRows = roomError && roomError.code === 'PGRST116';
-
-      // --- STEP 3 DIAGNOSTIC PRINT ---
-      console.log('=== [SyncWave Step 3 Trace: fetchRoomDetails execution] ===');
-      console.log('Supabase URL:', supabaseUrlStep3);
-      console.log('Project Reference:', projectRefStep3);
-      console.log('Requested slug:', roomCode);
-      console.log('Returned row count:', (roomData && !isNoRows) ? 1 : 0);
-      console.log('Returned room object:', JSON.stringify(isNoRows ? null : roomData, null, 2));
-      console.log('Returned error:', JSON.stringify(isNoRows ? null : roomError, null, 2));
-      console.log('===========================================================');
-
-      // Handle no-rows return from .single() (Supabase returns error PGRST116)
-      if (roomError && roomError.code === 'PGRST116') {
-        roomData = null;
-        roomError = null;
-      }
-
-      console.log('Returned rows count:', roomData ? 1 : 0);
-      console.log('[SyncWave Join Debug] Raw Supabase Return Values:', {
-        hasData: !!roomData,
-        dataFields: roomData ? Object.keys(roomData) : null,
-        roomDataValues: roomData ? {
-          id: roomData.id,
-          name: roomData.name,
-          slug: roomData.slug,
-          host_id: roomData.host_id,
-          is_private: roomData.is_private,
-          created_at: roomData.created_at
-        } : null,
-        hasError: !!roomError,
-        errorDetails: roomError ? {
-          code: roomError.code,
-          message: roomError.message,
-          details: roomError.details,
-          hint: roomError.hint
-        } : null
-      });
-
-      // Checking potential RLS blocks or permission checks
-      if (roomError) {
-        console.error('[SyncWave Join Debug] RLS or query failure detected in database selection:', roomError.message);
-        if (roomError.code === '42501') {
-          console.error('[SyncWave Join Debug] RLS POLICY WARNING: Code 42501 indicates Row-Level Security permission violation. The database is actively shielding these rows from public discovery!');
-        }
-      } else if (!roomData) {
-        console.warn('[SyncWave Join Debug] Empty Response: Row Resolution returned Null. Either the rooms table has no entry with slug matching:', roomCode, 'or an RLS SELECT policy is actively filtering it.');
-      } else {
-        console.log('[SyncWave Join Debug] Room found successfully:', roomData.name, `(${roomData.id})`);
-      }
-
-      writeLog('info', 'DEBUG JOIN', `Lounge resolution checklist - Entered: "${roomCode}", Column matching: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${roomCode}', Status: ${roomError ? 'ERROR' : (roomData ? 'FOUND' : 'NULL')}, Row ID: ${roomData?.id || 'N/A'}`);
-
-      if (roomError) throw roomError;
-
-      if (!roomData) {
+      if (snap.empty) {
         setRoom(null);
         setLoading(false);
         return;
       }
 
-      const rAny = roomData as any;
-      setRoom(rAny);
-
-      // 2. Fetch Active Members in this room
-      console.log('[SyncWave Join Debug] Querying active room members for Room ID:', rAny.id);
-      const { data: membersData, error: membersError } = await supabase
-        .from('room_members')
-        .select('*, profiles(display_name, username, avatar_url)')
-        .eq('room_id', rAny.id);
-
-      if (membersError) {
-        console.error('[SyncWave Join Debug] Member query error (Potentially RLS filter mismatch):', {
-          code: membersError.code,
-          message: membersError.message,
-          details: membersError.details,
-          hint: membersError.hint
-        });
-        throw membersError;
-      }
-      console.log('[SyncWave Join Debug] Members recovered:', membersData?.length || 0, 'occupants registered in active room.');
-      setMembers(membersData || []);
-
-      // 3. Fetch recent messages logs
-      console.log('[SyncWave Join Debug] Reading recent chat messages for Room ID:', rAny.id);
-      const { data: messagesData, error: messagesError } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('room_id', rAny.id)
-        .order('created_at', { ascending: true })
-        .limit(100);
-
-      if (messagesError) {
-        console.error('[SyncWave Join Debug] Chat logs loading error (Potentially RLS block):', {
-          code: messagesError.code,
-          message: messagesError.message,
-          details: messagesError.details,
-          hint: messagesError.hint
-        });
-        throw messagesError;
-      }
-      console.log('[SyncWave Join Debug] Messages retrieved count:', messagesData?.length || 0);
-
-      // Adapt structure to local models
-      const mappedMessages: ChatMessage[] = ((messagesData as any[]) || []).map((m: any) => {
-        // Resolve sender display name from members list
-        const senderMember = ((membersData as any[]) || []).find(
-          (member: any) => member.user_id === m.sender_id || member.guest_id === m.sender_id
-        );
-        const sAny = senderMember as any;
-        return {
-          id: m.id,
-          room_id: m.room_id,
-          sender_id: m.sender_id,
-          sender_name: sAny?.profiles?.display_name || sAny?.display_name || 'Anonymous',
-          content: m.content,
-          created_at: m.created_at
-        };
-      });
-      setMessages(mappedMessages);
-
+      const d = snap.docs[0];
+      const roomData = { id: d.id, ...d.data() } as Room;
+      setRoom(roomData);
       return roomData;
     } catch (e: any) {
-      console.error('[SyncWave Join Debug] Error during fetchRoomDetails transaction execution sequence:', e.message);
-      writeLog('error', 'Room connection', `Could not initialize room schema: ${e.message}`);
+      console.error('[SyncWave Core] Error in fetchRoomDetails:', e);
       setInitError(e.message || 'Error occurred while loading room data.');
       setLoading(false);
     }
-  }, [roomCode]);
+  }, [roomCode, firebaseConnected]);
 
   // Sync / join room membership
   const joinRoomAsRegisteredUser = React.useCallback(async (roomId: string, userId: string, userEmail: string) => {
-    const supabase = getSupabase() as any;
-    if (!supabase) {
-      console.error('[SyncWave Join Debug] Supabase client absent inside joinRoomAsRegisteredUser.');
-      setLoading(false);
-      return;
-    }
-
     try {
-      console.log('[SyncWave Join Debug] joinRoomAsRegisteredUser Initiated:', { roomId, userId, userEmail });
-      
-      // Make sure registered user has their profile built
-      console.log('[SyncWave Join Debug] Resolving user profile...');
+      const { collection, query, where, getDocs, addDoc } = await import('firebase/firestore');
       const userProfile = await getOrCreateProfile(userId, userEmail);
-      console.log('[SyncWave Join Debug] User Profile Resolved:', userProfile);
 
-      // Prevent duplicate membership entries by querying existing
-      console.log('[SyncWave Join Debug] Checking existing membership for User ID:', userId, 'and Room ID:', roomId);
-      const { data: existing, error: findError } = await supabase
-        .from('room_members')
-        .select('*')
-        .eq('room_id', roomId)
-        .eq('user_id', userId)
-        .maybeSingle();
+      const q = query(collection(db, 'room_members'), where('room_id', '==', roomId), where('user_id', '==', userId));
+      const snap = await getDocs(q);
 
-      if (findError) {
-        console.error('[SyncWave Join Debug] Existing membership query failed:', {
-          code: findError.code,
-          message: findError.message,
-          details: findError.details,
-          hint: findError.hint
-        });
-        throw findError;
-      }
-
-      const extAny = existing as any;
-      console.log('[SyncWave Join Debug] Existing membership check results:', {
-        found: !!extAny,
-        memberId: extAny?.id,
-        isBanned: extAny?.is_banned,
-        role: extAny?.role
-      });
-
-      if (extAny) {
-        // Check if banned
-        if (extAny.is_banned) {
-          console.warn('[SyncWave Join Debug] Registered user is blocked from entering: current profile reflects active banned state.');
+      if (!snap.empty) {
+        const memberData = { id: snap.docs[0].id, ...snap.docs[0].data() } as RoomMember;
+        if (memberData.is_banned) {
           setIsBanned(true);
           return;
         }
-        
-        setCurrentMember(extAny);
+        setCurrentMember(memberData);
         writeLog('info', 'Lounge synced', `Rejoining session lounge as registered user: @${userProfile.username}`);
       } else {
-        // Create new membership entry
-        console.log('[SyncWave Join Debug] Registering new member entry in room_members table for profile:', userProfile.display_name);
-        const { data: joinedRow, error: joinError } = await supabase
-          .from('room_members')
-          .insert({
-            room_id: roomId,
-            user_id: userId,
-            display_name: userProfile.display_name
-          } as any)
-          .select()
-          .single();
-
-        if (joinError) {
-          console.error('[SyncWave Join Debug] Row registration failed on insert. This may signify an insert RLS policy restriction:', {
-            code: joinError.code,
-            message: joinError.message,
-            details: joinError.details,
-            hint: joinError.hint
-          });
-          throw joinError;
-        }
-        
-        console.log('[SyncWave Join Debug] Membership created successfully:', joinedRow);
-
-        // Rigorous runtime verification assertion to verify that the member row actually exists in the database
-        const { data: verifiedUserMember, error: verifyUserMemberError } = await supabase
-          .from('room_members')
-          .select('*')
-          .eq('id', joinedRow.id)
-          .single();
-
-        if (verifyUserMemberError || !verifiedUserMember) {
-          throw new Error('Database verification failed: User room member row was inserted, but subsequent query returned nothing.');
-        }
-
+        const newMember = {
+          room_id: roomId,
+          user_id: userId,
+          display_name: userProfile.display_name,
+          is_muted: false,
+          is_banned: false,
+          joined_at: new Date().toISOString()
+        };
+        const docRef = await addDoc(collection(db, 'room_members'), newMember);
+        const joinedRow = { id: docRef.id, ...newMember } as RoomMember;
         setCurrentMember(joinedRow);
         writeLog('success', 'Lounge synced', `Registered user @${userProfile.username} entered the room session.`);
       }
     } catch (err: any) {
-      console.error('[SyncWave Join Debug] Error inside joinRoomAsRegisteredUser processing track:', err);
-      writeLog('error', 'Lounge synced', `Failed to join lounge matching registration: ${err.message}`);
+      console.error('[SyncWave Join Debug] Error inside joinRoomAsRegisteredUser:', err);
+      writeLog('error', 'Lounge synced', `Failed to join lounge: ${err.message}`);
       setInitError(err.message || 'Error occurred while joining room session.');
     }
   }, []);
 
   const handleGuestJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!room || guestSubmitting || !guestNameInput.trim()) {
-      console.warn('[SyncWave Join Debug] handleGuestJoinSubmit call bypassed:', { hasRoom: !!room, guestSubmitting, nameEmpty: !guestNameInput.trim() });
-      return;
-    }
+    if (!room || guestSubmitting || !guestNameInput.trim()) return;
 
     setGuestSubmitting(true);
     setGuestError(null);
 
-    const supabase = getSupabase() as any;
-    if (!supabase) {
-      console.error('[SyncWave Join Debug] Supabase client absent inside handleGuestJoinSubmit.');
-      setGuestSubmitting(false);
-      return;
-    }
-
     try {
+      const { collection, query, where, getDocs, addDoc } = await import('firebase/firestore');
       const trimmedName = guestNameInput.trim();
-      console.log('[SyncWave Join Debug] Guest login initiated with requested display name:', trimmedName);
-      
       const safeName = await getUniqueGuestName(room.id, trimmedName);
-      console.log('[SyncWave Join Debug] Generated unique/sanitized guest name:', safeName);
-      
-      // Check if this IP or display name exists with a ban in this room members list
-      console.log('[SyncWave Join Debug] Executing ban precheck for guest name:', safeName);
-      const { data: existingRecords, error: precheckError } = await supabase
-        .from('room_members')
-        .select('*')
-        .eq('room_id', room.id)
-        .eq('display_name', safeName);
 
-      if (precheckError) {
-        console.error('[SyncWave Join Debug] Ban precheck query failed:', {
-          code: precheckError.code,
-          message: precheckError.message,
-          details: precheckError.details,
-          hint: precheckError.hint
-        });
-        throw precheckError;
+      const checkQ = query(collection(db, 'room_members'), where('room_id', '==', room.id), where('display_name', '==', safeName));
+      const checkSnap = await getDocs(checkQ);
+
+      let isBannedMatch = false;
+      checkSnap.forEach((d) => {
+        if (d.data().is_banned) isBannedMatch = true;
+      });
+
+      if (isBannedMatch) {
+        setIsBanned(true);
+        setShowJoinPrompt(false);
+        setGuestSubmitting(false);
+        return;
       }
 
-      const banMatch = ((existingRecords as any[]) || []).find((v: any) => v.is_banned);
-      if (banMatch) {
-         console.warn('[SyncWave Join Debug] Guest matches banned record identifier in database.', banMatch);
-         setIsBanned(true);
-         setShowJoinPrompt(false);
-         setGuestSubmitting(false);
-         writeLog('warn', 'Security block', `Banned guest block matched display name pattern: "${safeName}"`);
-         return;
-      }
-
-      // Generate pristine guest unique identifiers
       const guestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
-      console.log('[SyncWave Join Debug] Inserting fresh guest row into room_members:', { roomId: room.id, guestId, safeName, sessionId });
 
-      const { data: row, error: insertError } = await supabase
-        .from('room_members')
-        .insert({
-          room_id: room.id,
-          guest_id: guestId,
-          display_name: safeName,
-          session_id: sessionId
-        } as any)
-        .select()
-        .single();
+      const newGuest = {
+        room_id: room.id,
+        guest_id: guestId,
+        display_name: safeName,
+        session_id: sessionId,
+        is_muted: false,
+        is_banned: false,
+        joined_at: new Date().toISOString()
+      };
 
-      if (insertError) {
-        console.error('[SyncWave Join Debug] Guest row insertion triggered exception. Make sure guest write policy on room_members table is fully allowed:', {
-          code: insertError.code,
-          message: insertError.message,
-          details: insertError.details,
-          hint: insertError.hint
-        });
-        throw insertError;
-      }
+      const docRef = await addDoc(collection(db, 'room_members'), newGuest);
+      const row = { id: docRef.id, ...newGuest } as RoomMember;
 
-      console.log('[SyncWave Join Debug] Guest registered successfully in room_members:', row);
-
-      // Rigorous runtime verification assertion to verify that the guest member row actually exists in the database
-      const { data: verifiedGuestMember, error: verifyGuestMemberError } = await supabase
-        .from('room_members')
-        .select('*')
-        .eq('id', row.id)
-        .single();
-
-      if (verifyGuestMemberError || !verifiedGuestMember) {
-        throw new Error('Database verification failed: Guest room member row was inserted, but subsequent query returned nothing.');
-      }
-
-      // Persist credentials locally for recovery on refresh
       setStoredGuestSession(guestId, safeName, sessionId);
       setCurrentMember(row);
       setShowJoinPrompt(false);
-      writeLog('success', 'Lounge synced', `Guest "${safeName}" joined synced session with temporary token id ${guestId.substring(0, 6)}.`);
-      
-      // Refresh list
+      writeLog('success', 'Lounge synced', `Guest "${safeName}" joined synced session.`);
       await fetchRoomDetails();
     } catch (err: any) {
       setGuestError(err.message || 'Operation forbidden by server constraints.');
-      writeLog('error', 'Lounge synced', `Guest configuration error: ${err.message}`);
     } finally {
       setGuestSubmitting(false);
     }
@@ -647,148 +378,93 @@ export default function RoomPage() {
 
   // Leave room logic
   const leaveRoom = React.useCallback(async () => {
-    if (!supabaseConnected || !currentMember || !room) return;
-
-    const supabase = getSupabase();
-    if (!supabase) return;
+    if (!firebaseConnected || !currentMember || !room) return;
 
     try {
-      writeLog('info', 'Lounge synced', `Initiating orderly departure from room session code ${roomCode}...`);
-      
-      const { error } = await supabase
-        .from('room_members')
-        .delete()
-        .eq('id', currentMember.id);
-
-      if (error) throw error;
-
-      // Reset states
+      const { doc, deleteDoc } = await import('firebase/firestore');
+      await deleteDoc(doc(db, 'room_members', currentMember.id));
       clearStoredGuestSession();
       setCurrentMember(null);
-      
-      writeLog('success', 'Lounge synced', `Left room code ${roomCode} successfully.`);
       router.replace(user ? '/dashboard' : '/');
     } catch (err: any) {
       console.error('Failed to leave room cleanly:', err.message);
-      // Fallback redirect anyway
       router.replace(user ? '/dashboard' : '/');
     }
-  }, [currentMember, room, roomCode, router, user, supabaseConnected, clearStoredGuestSession]);
+  }, [currentMember, room, router, user, firebaseConnected, clearStoredGuestSession]);
 
   // Send visual message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!typedMessage.trim() || !currentMember || !room || !supabaseConnected) return;
+    if (!typedMessage.trim() || !currentMember || !room || !firebaseConnected) return;
 
-    // Reject message sending if user is muted in the room
     if (currentMember.is_muted) {
       writeLog('warn', 'Chat blocker', `Muted participant attempt to post chat dismissed.`);
       return;
     }
 
-    const supabase = getSupabase();
-    if (!supabase) return;
-
     const currentText = typedMessage.trim();
     setTypedMessage('');
 
     try {
+      const { collection, addDoc } = await import('firebase/firestore');
       const senderId = currentMember.user_id || currentMember.guest_id || 'anonymous';
-      
-      const supabaseS = getSupabase() as any;
-      const { error } = await supabaseS
-        .from('messages')
-        .insert({
-          room_id: room.id,
-          sender_id: senderId,
-          content: currentText
-        } as any);
-
-      if (error) throw error;
+      await addDoc(collection(db, 'messages'), {
+        room_id: room.id,
+        sender_id: senderId,
+        content: currentText,
+        created_at: new Date().toISOString()
+      });
     } catch (err: any) {
       console.error('[Room Chat] Message delivery failed:', err.message);
-      writeLog('error', 'Chat blocker', `Message delivery failed: ${err.message}`);
     }
   };
 
   // Host Controls: Mute Member
   const toggleMuteMember = async (memberId: string, currentMuteState: boolean) => {
-    if (!room || !currentMember || !supabaseConnected) return;
-    const supabase = getSupabase() as any;
-    if (!supabase) return;
+    if (!room || !currentMember || !firebaseConnected) return;
+    if (room.host_id !== user?.uid) return;
 
-    // Check if current user is indeed the room host
-    if (room.host_id !== user?.id) {
-      writeLog('error', 'Security block', 'Unauthorized guest administration attempt. Operation blocked.');
+    try {
+      const { doc, updateDoc } = await import('firebase/firestore');
+      await updateDoc(doc(db, 'room_members', memberId), { is_muted: !currentMuteState });
+      writeLog('info', 'Security block', `Participant mute toggled to ${!currentMuteState} by Host.`);
+    } catch (err: any) {
+      console.error('Host control update failed:', err);
+    }
+  };
+
+  // Host Controls: Kick Member
+  const kickMember = async (memberId: string, displayName: string) => {
+    if (!room || !currentMember || !firebaseConnected) return;
+    if (room.host_id !== user?.uid) return;
+
+    try {
+      const { doc, deleteDoc } = await import('firebase/firestore');
+      await deleteDoc(doc(db, 'room_members', memberId));
+      writeLog('success', 'Security block', `Host kicked participant "${displayName}" from the session.`);
+    } catch (err: any) {
+      console.error('Kick execution rejected:', err.message);
+    }
+  };
+
+  // Host Controls: Ban Member
+  const banMember = async (memberId: string, displayName: string) => {
+    if (!room || !currentMember || !firebaseConnected) return;
+    if (room.host_id !== user?.uid) {
+      writeLog('error', 'Security block', 'Unauthorized ban request received.');
       return;
     }
 
     try {
-      const { error } = await supabase
-        .from('room_members')
-        .update({ is_muted: !currentMuteState } as any)
-        .eq('id', memberId);
-
-      if (error) throw error;
-      writeLog('info', 'Security block', `Participant mute toggled to ${!currentMuteState} by Host.`);
+      const { doc, updateDoc } = await import('firebase/firestore');
+      await updateDoc(doc(db, 'room_members', memberId), { is_banned: true });
+      writeLog('success', 'Security block', `Host banned participant "${displayName}".`);
     } catch (err: any) {
-      console.error('Host control update failed:', err);
-      writeLog('error', 'Security block', `Mute toggle action rejected: ${err.message}`);
+      console.error('Ban execution rejected:', err.message);
     }
   };
 
-  // Host Controls: Kick Member (orderly deletion)
-  const kickMember = async (memberId: string, displayName: string) => {
-    if (!room || !currentMember || !supabaseConnected) return;
-    const supabase = getSupabase() as any;
-    if (!supabase) return;
-
-    if (room.host_id !== user?.id) {
-       writeLog('error', 'Security block', 'Unauthorized kick request received.');
-       return;
-    }
-
-    try {
-      const { error } = await supabase
-        .from('room_members')
-        .delete()
-        .eq('id', memberId);
-
-      if (error) throw error;
-      writeLog('success', 'Security block', `Host kicked participant "${displayName}" from the session.`);
-    } catch (err: any) {
-      console.error('Kick execution rejected:', err.message);
-      writeLog('error', 'Security block', `Kick execution failed: ${err.message}`);
-    }
-  };
-
-  // Host Controls: Ban Member (mark is_banned column as true)
-  const banMember = async (memberId: string, displayName: string) => {
-    if (!room || !currentMember || !supabaseConnected) return;
-    const supabase = getSupabase() as any;
-    if (!supabase) return;
-
-    if (room.host_id !== user?.id) {
-       writeLog('error', 'Security block', 'Unauthorized ban request received.');
-       return;
-    }
-
-    try {
-      // Deleting active connection and updating ban record
-      const { error } = await supabase
-        .from('room_members')
-        .update({ is_banned: true } as any)
-        .eq('id', memberId);
-
-      if (error) throw error;
-      writeLog('success', 'Security block', `Host banned participant "${displayName}" from this session.`);
-    } catch (err: any) {
-      console.error('Ban operation failed:', err.message);
-      writeLog('error', 'Security block', `Ban configuration failed: ${err.message}`);
-    }
-  };
-
-  const currentIsHost = room ? room.host_id === user?.id : false;
+  const currentIsHost = room ? room.host_id === user?.uid : false;
 
   const handleHostPlay = async () => {
     if (!room || !currentIsHost) return;
@@ -819,7 +495,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.play(room.id, curTime, user?.id);
+    await PlaybackSyncService.play(room.id, curTime, user?.uid);
   };
 
   const handleHostPause = async () => {
@@ -847,7 +523,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.pause(room.id, curTime, user?.id);
+    await PlaybackSyncService.pause(room.id, curTime, user?.uid);
   };
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -884,7 +560,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, curTime, user?.id);
+    await PlaybackSyncService.seek(room.id, curTime, user?.uid);
   };
 
   const handleTimeUpdate = () => {
@@ -1043,10 +719,10 @@ export default function RoomPage() {
             // Player state tags: 1 = PLAYING, 2 = PAUSED, 0 = ENDED
             if (stateCode === 1) {
               const cur = ytPlayerRef.current?.getCurrentTime() || 0;
-              PlaybackSyncService.play(room?.id || '', cur, user?.id);
+              PlaybackSyncService.play(room?.id || '', cur, user?.uid);
             } else if (stateCode === 2) {
               const cur = ytPlayerRef.current?.getCurrentTime() || 0;
-              PlaybackSyncService.pause(room?.id || '', cur, user?.id);
+              PlaybackSyncService.pause(room?.id || '', cur, user?.uid);
             } else if (stateCode === 0) {
               handleMediaEnded();
             }
@@ -1105,7 +781,7 @@ export default function RoomPage() {
 
           if (currentIsHost && room) {
             // Update time in the database occasionally (throttle rate)
-            PlaybackSyncService.updateTime(room.id, cur, duration || 180, user?.id);
+            PlaybackSyncService.updateTime(room.id, cur, duration || 180, user?.uid);
           }
         }
       }, 1000);
@@ -1261,7 +937,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.updateRate(room.id, rate, user?.id);
+    await PlaybackSyncService.updateRate(room.id, rate, user?.uid);
     showToast(`Playback speed scaled to ${rate}x`, "success");
   };
 
@@ -1283,7 +959,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, target, user?.id);
+    await PlaybackSyncService.seek(room.id, target, user?.uid);
     showToast("Skipped backward 10s", "info");
   };
 
@@ -1305,7 +981,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, target, user?.id);
+    await PlaybackSyncService.seek(room.id, target, user?.uid);
     showToast("Skipped forward 10s", "info");
   };
 
@@ -1487,7 +1163,7 @@ export default function RoomPage() {
         nextItem.media_url,
         loadedType,
         nextItem.duration,
-        user?.id
+        user?.uid
       );
 
       // Force play on playback target
@@ -1507,31 +1183,13 @@ export default function RoomPage() {
 
   // TYPING INDICATORS BROADCASTER
   const handleTypingKeydown = () => {
-    const supabase = getSupabase() as any;
-    if (!supabase || !room || !currentMember || isTyping) return;
-
+    if (!room || !currentMember || isTyping) return;
     setIsTyping(true);
-    const channelName = `syncwave-realtime-room-${room.id}`;
-    const authorName = currentMember?.profiles?.display_name || currentMember?.display_name || 'Guest';
-
-    // Broadcast presence of typing
-    supabase.channel(channelName).send({
-      type: 'broadcast',
-      event: 'typing',
-      payload: { authorName, typingState: true }
-    });
-
     if ((window as any).typingTimer) {
       clearTimeout((window as any).typingTimer);
     }
-
     (window as any).typingTimer = setTimeout(() => {
       setIsTyping(false);
-      supabase.channel(channelName).send({
-        type: 'broadcast',
-        event: 'typing',
-        payload: { authorName, typingState: false }
-      });
     }, 2000);
   };
 
@@ -1559,7 +1217,7 @@ export default function RoomPage() {
         nextItem.media_url,
         loadedType,
         nextItem.duration,
-        user?.id
+        user?.uid
       );
 
       // Lazy start player
@@ -1575,7 +1233,7 @@ export default function RoomPage() {
     } else {
       writeLog('info', 'Sync Wave Engine', 'Playback ended and queue is empty, waiting in standby.');
       setIsPlaying(false);
-      await PlaybackSyncService.pause(room.id, currentTime, user?.id);
+      await PlaybackSyncService.pause(room.id, currentTime, user?.uid);
     }
   };
 
@@ -1598,7 +1256,7 @@ export default function RoomPage() {
     setCurrentTime(0);
     setIsPlaying(false);
     
-    await PlaybackSyncService.updateMedia(room.id, url, type, mediaDuration, user?.id);
+    await PlaybackSyncService.updateMedia(room.id, url, type, mediaDuration, user?.uid);
   };
 
   const formatTime = (seconds: number): string => {
@@ -1610,101 +1268,47 @@ export default function RoomPage() {
 
   // Setup room core connections and fetch metadata
   React.useEffect(() => {
-    if (!supabaseConnected || !roomCode) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!firebaseConnected || !roomCode) {
       setLoading(false);
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
 
-    const getProjectRefLocal = (url: string | undefined): string => {
-      if (!url) return 'undefined';
+    const initRoom = async () => {
       try {
-        const match = url.match(/https:\/\/([^.]+)\.supabase\.(co|net)/);
-        return match ? match[1] : 'unknown';
-      } catch (e) {
-        return 'error-parsing';
-      }
-    };
+        const { collection, query, where, getDocs } = await import('firebase/firestore');
+        const q = query(collection(db, 'rooms'), where('slug', '==', roomCode));
+        const snap = await getDocs(q);
 
-    const supabase = getSupabase() as any;
-    if (!supabase) {
-      setLoading(false);
-      return;
-    }
-
-    const supabaseUrlStep3 = process.env.NEXT_PUBLIC_SUPABASE_URL || 'undefined';
-    const projectRefStep3 = getProjectRefLocal(supabaseUrlStep3);
-
-    console.log('=== [SyncWave Room Page Init] ===');
-    console.log('Normalized Room Code:', roomCode);
-
-    supabase
-      .from('rooms')
-      .select('*')
-      .eq('slug', roomCode)
-      .single()
-      .then(async ({ data: roomData, error: roomError }: any) => {
-        // Handle no-rows PGRST116 gracefully
-        if (roomError && roomError.code === 'PGRST116') {
-          roomData = null;
-          roomError = null;
-        }
-
-        console.log('=== [SyncWave Step 3 Trace: fetchRoomDetails execution] ===');
-        console.log('Supabase URL:', supabaseUrlStep3);
-        console.log('Project Reference:', projectRefStep3);
-        console.log('Requested slug:', roomCode);
-        console.log('Returned row:', roomData);
-        console.log('Returned error:', roomError);
-        console.log('===========================================================');
-
-        if (roomError) {
-          throw roomError;
-        }
-
-        if (!roomData) {
+        if (snap.empty) {
           setRoom(null);
           setLoading(false);
           return;
         }
 
-        // Rigorous runtime verification assertion to confirm that room discovery succeeds and matches requested slug
-        if (roomData.slug.toUpperCase() !== roomCode.toUpperCase()) {
-          throw new Error(`Database integrity error: Searched room code ${roomCode} but database returned slug ${roomData.slug}.`);
-        }
-
+        const roomDoc = snap.docs[0];
+        const roomData = { id: roomDoc.id, ...roomDoc.data() } as Room;
         setRoom(roomData);
 
-        // Resolve current participant
         if (user) {
-          // Authenticated user
-          await joinRoomAsRegisteredUser(roomData.id, user.id, user.email || '');
+          await joinRoomAsRegisteredUser(roomData.id, user.uid, user.email || '');
         } else {
-          // Guest user
           const stored = getStoredGuestSession();
           if (stored) {
-            console.log('[SyncWave Join Debug] Verifying stored guest session on room_members:', stored);
-            const { data: memberRow, error: memberErr } = await supabase
-              .from('room_members')
-              .select('*')
-              .eq('room_id', roomData.id)
-              .eq('guest_id', stored.guestId)
-              .maybeSingle();
+            const memberQ = query(
+              collection(db, 'room_members'),
+              where('room_id', '==', roomData.id),
+              where('guest_id', '==', stored.guestId)
+            );
+            const memberSnap = await getDocs(memberQ);
 
-            if (memberErr || !memberRow) {
-              console.log('[SyncWave Join Debug] Stale guest session or error, resetting session.');
+            if (memberSnap.empty) {
               clearStoredGuestSession();
               setShowJoinPrompt(true);
               setLoading(false);
             } else {
-              // Rigorous runtime verification assertion for guest identifier
-              if (memberRow.guest_id !== stored.guestId) {
-                throw new Error('Database verification mismatch: Member guest_id does not match stored guest ID.');
-              }
-
+              const memberRow = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() } as RoomMember;
               if (memberRow.is_banned) {
                 setIsBanned(true);
                 setLoading(false);
@@ -1713,49 +1317,42 @@ export default function RoomPage() {
               }
             }
           } else {
-            console.log('[SyncWave Join Debug] No local session found, prompting display name.');
             setShowJoinPrompt(true);
             setLoading(false);
           }
         }
-      })
-      .catch((err: any) => {
+      } catch (err: any) {
         console.error('[SyncWave Core] Handshake error during room loading:', err);
         setInitError(err.message || 'Error occurred while establishing handshake.');
         setLoading(false);
-      });
-  }, [roomCode, user, supabaseConnected]);
+      }
+    };
+
+    initRoom();
+  }, [roomCode, user, firebaseConnected, joinRoomAsRegisteredUser, getStoredGuestSession, clearStoredGuestSession]);
 
   // Load room data & playback state once room & currentMember are resolved
   React.useEffect(() => {
-    if (!supabaseConnected || !room || !currentMember) return;
+    if (!firebaseConnected || !room || !currentMember) return;
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
-    const supabase = getSupabase() as any;
-    if (!supabase) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLoading(false);
-      return;
-    }
 
     const loadRoomData = async () => {
       try {
-        // 1. Load full members list
-        const { data: membersData, error: membersError } = await supabase
-          .from('room_members')
-          .select('*, profiles(display_name, username, avatar_url)')
-          .eq('room_id', room.id);
+        const { collection, query, where, getDocs, orderBy, limit } = await import('firebase/firestore');
 
-        if (membersError) throw membersError;
-        setMembers(membersData || []);
+        // 1. Load full members list
+        const mQ = query(collection(db, 'room_members'), where('room_id', '==', room.id));
+        const mSnap = await getDocs(mQ);
+        const membersList: RoomMember[] = [];
+        mSnap.forEach((d) => membersList.push({ id: d.id, ...d.data() } as RoomMember));
+        setMembers(membersList);
 
         // 2. Load playback state
-        const hostCheck = room.host_id === user?.id;
+        const hostCheck = room.host_id === user?.uid;
         const state = await PlaybackSyncService.initializePlaybackState(room.id, hostCheck);
         
         if (state) {
-          // Sync playback state
           let targetTime = state.current_time;
           if (state.is_playing && state.last_sync_at) {
             const elapsed = (Date.now() - new Date(state.last_sync_at).getTime()) / 1000;
@@ -1773,30 +1370,6 @@ export default function RoomPage() {
 
           syncLocalPlayerWithNewState(restoredState);
           setCurrentTime(targetTime);
-
-          // Apply to player references
-          setTimeout(() => {
-            const player = playerRef.current;
-            if (player) {
-              player.currentTime = targetTime;
-              player.playbackRate = Number(state.playback_rate) || 1;
-              if (state.is_playing) {
-                player.play().catch(e => console.log('[Playback Engine] Late join autoplay deferred:', e));
-              }
-            }
-            const yt = ytPlayerRef.current;
-            if (yt && typeof yt.getPlayerState === 'function') {
-              if (typeof yt.setPlaybackRate === 'function') {
-                try { yt.setPlaybackRate(Number(state.playback_rate) || 1); } catch (e) {}
-              }
-              if (typeof yt.seekTo === 'function') {
-                try { yt.seekTo(targetTime, true); } catch (e) {}
-              }
-              if (state.is_playing && typeof yt.playVideo === 'function') {
-                try { yt.playVideo(); } catch (e) {}
-              }
-            }
-          }, 650);
         }
 
         // 3. Load media queue
@@ -1804,28 +1377,20 @@ export default function RoomPage() {
         setQueue(items);
 
         // 4. Load messages
-        const { data: messagesData, error: messagesError } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('room_id', room.id)
-          .order('created_at', { ascending: true })
-          .limit(100);
-
-        if (messagesError) throw messagesError;
-
-        const mappedMessages: ChatMessage[] = ((messagesData as any[]) || []).map((m: any) => {
-          const senderMember = ((membersData as any[]) || []).find(
-            (member: any) => member.user_id === m.sender_id || member.guest_id === m.sender_id
-          );
-          const sAny = senderMember as any;
-          return {
-            id: m.id,
+        const msgQ = query(collection(db, 'messages'), where('room_id', '==', room.id), orderBy('created_at', 'asc'), limit(100));
+        const msgSnap = await getDocs(msgQ);
+        const mappedMessages: ChatMessage[] = [];
+        msgSnap.forEach((d) => {
+          const m = d.data();
+          const senderMember = membersList.find((mem) => mem.user_id === m.sender_id || mem.guest_id === m.sender_id);
+          mappedMessages.push({
+            id: d.id,
             room_id: m.room_id,
             sender_id: m.sender_id,
-            sender_name: sAny?.profiles?.display_name || sAny?.display_name || 'Anonymous',
+            sender_name: senderMember?.display_name || 'Anonymous',
             content: m.content,
             created_at: m.created_at
-          };
+          });
         });
         setMessages(mappedMessages);
 
@@ -1839,201 +1404,58 @@ export default function RoomPage() {
     };
 
     loadRoomData();
-  }, [room, currentMember, supabaseConnected, user]);
+  }, [room, currentMember, firebaseConnected, user]);
 
-  // Realtime Subscriptions & Presence setup
+  // Firestore Realtime Subscriptions setup
   React.useEffect(() => {
-    const supabase = getSupabase() as any;
-    if (!supabase || !room || !currentMember) return;
+    if (!firebaseConnected || !room || !currentMember) return;
 
-    const channelName = `syncwave-realtime-room-${room.id}`;
-    writeLog('info', 'Lounge synced', `Establishing dynamic Realtime socket channel on SyncWave publication cluster...`);
+    let unsubMembers: () => void;
+    let unsubMessages: () => void;
 
-    const channel = supabase.channel(channelName);
-    presenceChannelRef.current = channel;
+    import('firebase/firestore').then(({ collection, query, where, onSnapshot, orderBy, limit }) => {
+      // Room members listener
+      const mQ = query(collection(db, 'room_members'), where('room_id', '==', room.id));
+      unsubMembers = onSnapshot(mQ, (snap) => {
+        const membersList: RoomMember[] = [];
+        snap.forEach((d) => membersList.push({ id: d.id, ...d.data() } as RoomMember));
+        setMembers(membersList);
 
-    channel
-      // Listen to room membership adjustments
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${room.id}` },
-        async (payload: any) => {
-          console.log('[Room Realtime Update] room_members payload:', payload);
-          
-          // Re-fetch all members to maintain full profile resolution joins cleanly
-          const { data: updatedMembers, error } = await supabase
-            .from('room_members')
-            .select('*, profiles(display_name, username, avatar_url)')
-            .eq('room_id', room.id);
-
-          if (!error && updatedMembers) {
-            setMembers(updatedMembers);
-
-            // Handle deletions / bans affecting current client
-            const currentInDB = ((updatedMembers as any[]) || []).find((m: any) => m.id === currentMember.id);
-            if (!currentInDB) {
-              setIsKicked(true);
-              writeLog('warn', 'Security block', `Server dismissed current occupant membership signature.`);
-            } else {
-              if (currentInDB.is_banned) {
-                setIsBanned(true);
-                writeLog('error', 'Security block', `Security policy revised: current member banned.`);
-              }
-              setCurrentMember(currentInDB);
-            }
+        const currentInDB = membersList.find((m) => m.id === currentMember.id);
+        if (!currentInDB) {
+          setIsKicked(true);
+        } else {
+          if (currentInDB.is_banned) {
+            setIsBanned(true);
           }
-        }
-      )
-      // Listen to new chat messages
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` },
-        (payload: any) => {
-          console.log('[Room Realtime Update] messages payload:', payload);
-          const newMsg = payload.new;
-          
-          const mAuthor = currentMember.user_id === newMsg.sender_id || currentMember.guest_id === newMsg.sender_id;
-          if (!mAuthor) {
-            setUnreadCount((c) => c + 1);
-          }
-
-          // Use members list in state to resolve display name matching sender_id quickly
-          setMembers((currentMembers) => {
-            const senderCell = currentMembers.find(
-              (m) => m.user_id === newMsg.sender_id || m.guest_id === newMsg.sender_id
-            );
-            const senderNickname = senderCell?.profiles?.display_name || senderCell?.display_name || 'Anonymous';
-
-            setMessages((prev) => {
-              if (prev.some((msg) => msg.id === newMsg.id)) return prev;
-              return [
-                ...prev,
-                {
-                  id: newMsg.id,
-                  room_id: newMsg.room_id,
-                  sender_id: newMsg.sender_id,
-                  sender_name: senderNickname,
-                  content: newMsg.content,
-                  created_at: newMsg.created_at
-                }
-              ];
-            });
-
-            return currentMembers;
-          });
-        }
-      )
-      // Listen to room playback adjustments
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'playback_state', filter: `room_id=eq.${room.id}` },
-        (payload: any) => {
-          console.log('[Room Realtime Update] playback_state payload:', payload);
-          const newState = payload.new as PlaybackState;
-          if (newState) {
-            syncLocalPlayerWithNewState(newState);
-          }
-        }
-      )
-      // Listen to media queue additions, removals or position swaps
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'media_queue', filter: `room_id=eq.${room.id}` },
-        async (payload: any) => {
-          console.log('[Room Realtime Update] media_queue payload:', payload);
-          const freshQueue = await PlaybackSyncService.fetchQueue(room.id);
-          setQueue(freshQueue);
-        }
-      )
-      // Typing Broadcast indicators
-      .on('broadcast', { event: 'typing' }, (payload: any) => {
-        const { authorName, typingState } = payload.payload;
-        if (authorName) {
-          setTypingUsers((current) => {
-            if (typingState) {
-              if (current.includes(authorName)) return current;
-              return [...current, authorName];
-            } else {
-              return current.filter((u) => u !== authorName);
-            }
-          });
-        }
-      })
-      // REAL-TIME PRESENCE EVENTS Tracking Status
-      .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState();
-        const updatedPresences: Record<string, { status: string; last_seen_at: string }> = {};
-        
-        Object.keys(state).forEach((key) => {
-          const userPresences = state[key] as any[];
-          userPresences.forEach((p) => {
-            const id = p.user_id || p.guest_id;
-            if (id) {
-              updatedPresences[id] = {
-                status: p.status || 'Online',
-                last_seen_at: p.last_seen_at || new Date().toISOString()
-              };
-            }
-          });
-        });
-        
-        setPresences(updatedPresences);
-      })
-      .subscribe(async (status: any) => {
-        if (status === 'SUBSCRIBED') {
-          writeLog('success', 'Lounge synced', `Supabase Realtime subscription status: CONNECTED to room_members, messages, playback_state, & media_queue!`);
-          
-          // Initial presence tracking register
-          let initialStatus = 'Online';
-          if (isPlaying) {
-            initialStatus = 'Listening';
-          } else if (mediaUrl) {
-            initialStatus = 'Idle';
-          }
-          
-          await channel.track({
-            user_id: currentMember.user_id || null,
-            guest_id: currentMember.guest_id || null,
-            display_name: currentMember.display_name || 'Lounge Guest',
-            status: initialStatus,
-            last_seen_at: new Date().toISOString()
-          });
+          setCurrentMember(currentInDB);
         }
       });
 
+      // Messages listener
+      const msgQ = query(collection(db, 'messages'), where('room_id', '==', room.id), orderBy('created_at', 'asc'), limit(100));
+      unsubMessages = onSnapshot(msgQ, (snap) => {
+        const msgs: ChatMessage[] = [];
+        snap.forEach((d) => {
+          const m = d.data();
+          msgs.push({
+            id: d.id,
+            room_id: m.room_id,
+            sender_id: m.sender_id,
+            sender_name: m.sender_id === currentMember.user_id ? (currentMember.display_name || 'You') : 'Participant',
+            content: m.content,
+            created_at: m.created_at
+          });
+        });
+        setMessages(msgs);
+      });
+    });
+
     return () => {
-      writeLog('info', 'Lounge synced', `Dismantling socket channel session...`);
-      supabase.removeChannel(channel);
-      presenceChannelRef.current = null;
+      if (unsubMembers) unsubMembers();
+      if (unsubMessages) unsubMessages();
     };
-  }, [room, currentMember, supabaseConnected]);
-
-  // Dynamically update presence tracking status when player state changes
-  React.useEffect(() => {
-    if (!presenceChannelRef.current || !currentMember) return;
-    
-    let status = 'Online';
-    if (isPlaying) {
-      status = 'Listening';
-    } else if (mediaStatus === 'Buffering') {
-      status = 'Buffering';
-    } else if (mediaUrl) {
-      status = 'Idle';
-    }
-
-    presenceChannelRef.current.track({
-      user_id: currentMember.user_id || null,
-      guest_id: currentMember.guest_id || null,
-      display_name: currentMember.display_name || 'Lounge Guest',
-      status: status,
-      last_seen_at: new Date().toISOString()
-    }).catch((err: any) => console.warn('[Presence] track status failed:', err));
-  }, [isPlaying, mediaStatus, mediaUrl, currentMember]);
-
-  // Keep chat scrolled automatically to bottom on new messages
-  React.useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [room, currentMember, firebaseConnected]);
 
   const copyInviteLink = () => {
     if (typeof window === 'undefined') return;
@@ -2051,9 +1473,12 @@ export default function RoomPage() {
     setIsShareModalOpen(true);
   };
 
-  // Render Supabase initialization error card if auth config is missing
-  if (!supabaseConnected) {
-    return <SupabaseSetupNeeded />;
+  if (!firebaseConnected) {
+    return (
+      <div className="min-h-screen bg-stone-950 flex items-center justify-center p-4 text-stone-100 font-sans">
+        <p className="text-sm text-stone-400">Firebase configuration missing or connecting...</p>
+      </div>
+    );
   }
 
   if (loading) {
@@ -2163,7 +1588,7 @@ export default function RoomPage() {
   console.log("ROOM PAGE DEBUG", {
     roomFound: !!room,
     roomData: room,
-    authUser: user ? { id: user.id, email: user.email } : null,
+    authUser: user ? { id: user.uid, email: user.email } : null,
     guestSession: getStoredGuestSession(),
     memberRecord: currentMember,
     loading,
@@ -2273,7 +1698,7 @@ export default function RoomPage() {
   }
 
   // Active user / host is resolved! Render pristine Collaborative Workspace
-  const isHost = room.host_id === user?.id;
+  const isHost = room.host_id === user?.uid;
   return (
     <div id="room-viewport" className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col font-sans select-none overflow-y-auto pb-16 transition-colors duration-200 relative">
       
@@ -2372,7 +1797,7 @@ export default function RoomPage() {
               </button>
 
               <a
-                href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`}
+                href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.uid || ''}_${room?.slug || ''}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 rounded-xl text-xs text-sky-600 dark:text-sky-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
@@ -2418,7 +1843,7 @@ export default function RoomPage() {
               <svg className="w-3.5 h-3.5 text-sky-500 fill-current" viewBox="0 0 24 24">
                 <path d="M11.944 0C5.337 0 0 5.337 0 11.944c0 6.607 5.337 11.944 11.944 11.944 6.608 0 11.944-5.337 11.944-11.944C23.888 5.337 18.552 0 11.944 0zm5.556 8.3c-.172 1.812-.924 6.25-1.306 8.3-.162.868-.482 1.16-.792 1.188-.674.062-1.186-.445-1.838-.872-1.02-.668-1.597-1.082-2.587-1.734-1.144-.754-.402-1.168.25-1.844.17-.176 3.128-2.87 3.185-3.11.007-.031.014-.146-.055-.207-.068-.061-.169-.04-.242-.024-.104.024-1.764 1.12-5.0 3.31-.474.326-.88.487-1.218.479-.373-.008-1.089-.21-1.623-.383-.654-.213-1.174-.326-1.129-.688.023-.189.283-.382.78-.58 3.048-1.326 5.08-2.204 6.095-2.636 2.9-.1.233.1.65.114.925.1.018.232.042.483-.021.233-.062.518-.211.758-.415.24-.204.288-.475.253-.781-.035-.306-.217-.43-.45-.48z"/>
               </svg>
-              <span>Control this room using <a href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:underline font-bold transition">SyncWaveBot</a></span>
+              <span>Control this room using <a href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.uid || ''}_${room?.slug || ''}`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:underline font-bold transition">SyncWaveBot</a></span>
             </div>
           </div>
         </div>
@@ -2798,7 +2223,7 @@ export default function RoomPage() {
 
                       // Emit rapid time-seek update from volume changes if host to satisfy sync table constraints immediately
                       if (currentIsHost && room) {
-                        PlaybackSyncService.updateTime(room.id, currentTime, duration || 180, user?.id).catch(() => {});
+                        PlaybackSyncService.updateTime(room.id, currentTime, duration || 180, user?.uid).catch(() => {});
                       }
                     }}
                     className="w-14 accent-amber-500 h-1 bg-stone-850 rounded appearance-none cursor-pointer"
@@ -3479,7 +2904,7 @@ export default function RoomPage() {
                   <div className="grid grid-cols-2 gap-3.5 pt-1">
                     {/* Open Telegram */}
                     <a
-                      href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`}
+                      href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.uid || ''}_${room?.slug || ''}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer shadow-md shadow-sky-500/10 text-center"

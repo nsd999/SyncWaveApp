@@ -3,7 +3,8 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getSupabase } from '@/lib/supabase';
+import { auth, isFirebaseConfigured } from '@/lib/firebase';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { cleanBaseUsername } from '@/lib/username';
@@ -22,7 +23,6 @@ export default function SignupPage() {
 
   React.useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsPendingCreate(true);
     }
   }, []);
@@ -31,8 +31,6 @@ export default function SignupPage() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Prevent duplicate requests
     if (submitting) return;
 
     if (!email.trim() || !password) {
@@ -40,14 +38,12 @@ export default function SignupPage() {
       return;
     }
 
-    // Client-side email format check
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email.trim())) {
       setErrorMsg('Please enter a valid email address.');
       return;
     }
 
-    // Client-side password length check (Supabase default is 6)
     if (password.length < 6) {
       setErrorMsg('Your password should be at least 6 characters long.');
       return;
@@ -57,82 +53,41 @@ export default function SignupPage() {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    writeLog('info', 'Signup started', `Attempting signup and profile generation: ${email}`);
+    writeLog('info', 'Signup started', `Attempting signup for: ${email}`);
 
-    const supabase = getSupabase();
-    if (!supabase) {
-      setErrorMsg('Supabase client failed to resolve. Check configuration variables.');
+    if (!isFirebaseConfigured()) {
+      setErrorMsg('Firebase client is unconfigured in this applet.');
       setSubmitting(false);
       return;
     }
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Sign up transaction reached the 15-second threshold limit.'));
-      }, 15000);
-      if (timer && typeof timer.unref === 'function') {
-        timer.unref();
-      }
-    });
-
-    // Provide default metadata so Supabase can hold initial visual profile values
-    const actionPromise = supabase.auth.signUp({
-      email: email.trim(),
-      password: password,
-      options: {
-        data: {
-          display_name: displayName.trim() || email.split('@')[0] || 'New Member',
-        },
-      },
-    });
-
     try {
-      const { data, error } = await Promise.race([actionPromise, timeoutPromise]);
+      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const user = userCredential.user;
 
-      if (error) {
-        throw error;
-      }
-
-      if (data?.user) {
-        writeLog('success', 'Signup success', `Successfully registered in Supabase auth database: ${data.user.email}`);
-
+      if (user) {
+        writeLog('success', 'Signup success', `Registered user in Firebase auth: ${user.email}`);
         setSuccessMsg('Initializing your SyncWave profile...');
 
         try {
-          // Immediately establish the mandatory Profile row
           const resolvedDisplay = displayName.trim() || email.split('@')[0] || 'New Member';
-          await getOrCreateProfile(data.user.id, data.user.email || '', resolvedDisplay);
-          writeLog('success', 'Profile created', `Profile successfully established for: ${data.user.id}`);
+          await getOrCreateProfile(user.uid, user.email || '', resolvedDisplay);
+          writeLog('success', 'Profile created', `Profile created for: ${user.uid}`);
 
-          const session = data.session;
-          if (session) {
-            setSuccessMsg('Account created! Your secure session has been established. Loading sandbox...');
-            setTimeout(() => {
-              const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-              if (pending) {
-                router.replace('/');
-              } else {
-                router.replace('/dashboard');
-              }
-            }, 1500);
-          } else {
-            // Note: If email confirmation is enabled on Supabase, a session won't be returned immediately.
-            setSuccessMsg(
-              'Registration successful! Please confirm your details via your email inbox verification link, then revisit our Sign In page.'
-            );
-            writeLog('info', 'Password recovery', `Email verification check outbound for ${email}`);
-            setEmail('');
-            setPassword('');
-            setDisplayName('');
-          }
+          setSuccessMsg('Account created! Loading dashboard...');
+          setTimeout(() => {
+            const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
+            if (pending) {
+              router.replace('/');
+            } else {
+              router.replace('/dashboard');
+            }
+          }, 1000);
         } catch (profileErr: any) {
-          writeLog('error', 'Signup failure', `Profile creation constraint failed: ${profileErr.message}`);
-          // Sign out immediately to block partial registration success
-          await supabase.auth.signOut();
+          writeLog('error', 'Signup failure', `Profile creation failed: ${profileErr.message}`);
+          await auth.signOut();
           throw new Error(profileErr.message || 'We could not establish your user profile record.');
         }
-      } else {
-        throw new Error('No user metadata returned from database registries.');
       }
     } catch (err: any) {
       writeLog('error', 'Signup failure', `Signup sequence aborted: ${err.message || err}`);
@@ -144,8 +99,6 @@ export default function SignupPage() {
   return (
     <div id="signup-viewport" className="min-h-screen flex items-center justify-center p-4 bg-stone-50 select-none">
       <div id="signup-card" className="w-full max-w-md bg-white border border-stone-200/80 rounded-2xl shadow-xl shadow-stone-100 p-6 md:p-8 flex flex-col space-y-6">
-        
-        {/* Branding */}
         <div id="signup-brand" className="space-y-1.5 text-center">
           <div className="mx-auto bg-stone-900 text-stone-50 w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-stone-200 border border-stone-800">
             <Activity className="w-5 h-5 text-amber-400 rotate-185 animate-pulse" />
@@ -160,19 +113,12 @@ export default function SignupPage() {
           </div>
         )}
 
-        {/* Message Callouts */}
         {errorMsg && (
           <div id="signup-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-semibold text-rose-900">Registration Denied</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
-              <button 
-                onClick={handleSignup}
-                className="mt-2 text-[11px] font-semibold text-rose-800 underline hover:text-rose-950 block transition"
-              >
-                Retry Registration
-              </button>
             </div>
           </div>
         )}
@@ -187,10 +133,8 @@ export default function SignupPage() {
           </div>
         )}
 
-        {/* Form elements */}
         {!successMsg && (
           <form id="signup-form" onSubmit={handleSignup} className="space-y-4">
-            
             <div className="space-y-1">
               <label className="text-[11px] font-mono uppercase tracking-wider text-stone-500 block">Display Name (Optional)</label>
               <div className="relative">
@@ -224,8 +168,6 @@ export default function SignupPage() {
                   className="w-full text-sm pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-stone-900 transition text-stone-900"
                 />
               </div>
-              
-              {/* Unique proposed username visual tag */}
               {proposedUsername && (
                 <p className="text-[10px] font-mono text-zinc-500 pt-1.5 flex items-center justify-between">
                   <span>Unique Proposed Suffix:</span>
@@ -272,7 +214,6 @@ export default function SignupPage() {
           </form>
         )}
 
-        {/* Footer Redirect block */}
         <div id="signup-footer" className="text-center pt-2 border-t border-stone-100">
           <p className="text-xs text-stone-500">
             Already have a wave identity?{' '}
@@ -284,7 +225,6 @@ export default function SignupPage() {
             </Link>
           </p>
         </div>
-
       </div>
     </div>
   );

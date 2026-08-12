@@ -4,7 +4,8 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
-import { getSupabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase';
+import { collection, query, where, getDocs, addDoc, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { generateRoomCode, getUniqueGuestName } from '@/lib/room';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
@@ -128,170 +129,53 @@ export default function Home() {
     setCreatingRoom(true);
     setCreateError(null);
 
-    const supabase = getSupabase() as any;
-    if (!supabase) {
-      setCreateError('Supabase database client could not be loaded.');
-      setCreatingRoom(false);
-      return;
-    }
-
     try {
-      // Rule 1: Active authenticated session exists
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error('No active authenticated session exists. Please sign in again.');
-      }
-
-      // Rule 2: Profile exists (using Profile Recovery system)
-      const userProfile = await getOrCreateProfile(user.id, user.email || '');
+      const userProfile = await getOrCreateProfile(user.uid, user.email || '');
       if (!userProfile) {
         throw new Error('Unresolved profile configuration. Please make sure profile initialization exists.');
       }
 
       const code = generateRoomCode();
-      
-      // Slug collision check with verification
-      const { data: conflict, error: conflictError } = await supabase
-        .from('rooms')
-        .select('id')
-        .eq('slug', code)
-        .maybeSingle();
+      const activeCode = code;
 
-      if (conflictError) {
-        throw new Error(`Database error during slug collision check: ${conflictError.message}`);
-      }
+      const roomData = {
+        name: createName.trim(),
+        slug: activeCode,
+        description: createDesc.trim() || null,
+        host_id: user.uid,
+        is_private: createIsPrivate,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-      const activeCode = conflict ? generateRoomCode() : code;
+      const roomDocRef = await addDoc(collection(db, 'rooms'), roomData);
+      const roomId = roomDocRef.id;
 
-      // Rule 3: Room insert succeeded
-      const { data: newRoom, error: roomError } = await supabase
-        .from('rooms')
-        .insert({
-          name: createName.trim(),
-          slug: activeCode,
-          description: createDesc.trim() || undefined,
-          host_id: user.id,
-          is_private: createIsPrivate
-        } as any)
-        .select()
-        .single();
+      await addDoc(collection(db, 'room_members'), {
+        room_id: roomId,
+        user_id: user.uid,
+        display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host',
+        is_muted: false,
+        is_banned: false,
+        joined_at: new Date().toISOString(),
+      });
 
-      // --- STEP 1 DIAGNOSTIC PRINT ---
-      const supabaseUrlForTrace = process.env.NEXT_PUBLIC_SUPABASE_URL || 'undefined';
-      const projectRefForTrace = getProjectRef(supabaseUrlForTrace);
-      
-      console.log('=== [SyncWave Step 1 Trace: Room Creation] ===');
-      console.log('Room UUID:', newRoom?.id || 'undefined');
-      console.log('Room Slug:', activeCode);
-      console.log('Supabase URL:', supabaseUrlForTrace);
-      console.log('Project Reference:', projectRefForTrace);
-      console.log('Insert Response:', JSON.stringify(newRoom, null, 2));
-      console.log('Insert Error:', JSON.stringify(roomError, null, 2));
+      const defaultState = {
+        room_id: roomId,
+        media_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+        media_type: 'video',
+        is_playing: false,
+        current_time: 0,
+        duration: 596,
+        playback_rate: 1,
+        last_sync_at: new Date().toISOString()
+      };
 
-      if (roomError || !newRoom) {
-        throw new Error(roomError?.message || 'Host room database insertion failed.');
-      }
+      await setDoc(doc(db, 'playback_state', roomId), defaultState);
 
-      // Query right back immediately to verify that the room exists and is discoverable by its slug
-      const { data: reQueryRow, error: reQueryError } = await supabase
-        .from('rooms')
-        .select('*')
-        .eq('slug', activeCode)
-        .maybeSingle();
-
-      console.log('Immediate query [slug=' + activeCode + '] row count:', reQueryRow ? 1 : 0);
-      console.log('Immediate query [slug=' + activeCode + '] row:', JSON.stringify(reQueryRow, null, 2));
-      console.log('Immediate query [slug=' + activeCode + '] error:', JSON.stringify(reQueryError, null, 2));
-      console.log('=============================================');
-
-      if (reQueryError || !reQueryRow) {
-        throw new Error('Database discovery check failed: Room was inserted, but immediately querying it by its slug returned nothing. Check RLS or database replication status.');
-      }
-
-      // Rollback guard for inner transactions
-      try {
-        // 1. Double verify that the room exists by its primary key (ID)
-        const { data: verifiedRoom, error: verifyError } = await supabase
-          .from('rooms')
-          .select('*')
-          .eq('id', newRoom.id)
-          .single();
-
-        if (verifyError || !verifiedRoom) {
-          throw new Error('Room existence verification by ID failed right after insertion.');
-        }
-
-        // 2. Insert the host into room_members
-        const { data: newMember, error: memberError } = await supabase
-          .from('room_members')
-          .insert({
-            room_id: newRoom.id,
-            user_id: user.id,
-            display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host'
-          } as any)
-          .select()
-          .single();
-
-        if (memberError || !newMember) {
-          throw new Error(memberError?.message || 'Lounge host membership registration failed in the database.');
-        }
-
-        // Verify that the host membership actually exists in the database
-        const { data: verifiedMember, error: verifyMemberError } = await supabase
-          .from('room_members')
-          .select('*')
-          .eq('id', newMember.id)
-          .single();
-
-        if (verifyMemberError || !verifiedMember) {
-          throw new Error('Database verification failed: Host member row was inserted, but query returned nothing.');
-        }
-
-        // 3. Create the initial playback_state
-        const defaultState = {
-          room_id: newRoom.id,
-          media_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-          media_type: 'video',
-          is_playing: false,
-          current_time: 0,
-          duration: 596, // Approximate duration of BigBuckBunny.mp4 (596 seconds)
-          playback_rate: 1,
-          last_sync_at: new Date().toISOString()
-        };
-
-        const { error: playbackError } = await supabase
-          .from('playback_state')
-          .insert(defaultState as any);
-
-        if (playbackError) {
-          throw new Error(playbackError.message || 'Initial playback state registration failed.');
-        }
-
-        // Verify that playback_state actually exists
-        const { data: verifiedState, error: verifyStateError } = await supabase
-          .from('playback_state')
-          .select('*')
-          .eq('room_id', newRoom.id)
-          .single();
-
-        if (verifyStateError || !verifiedState) {
-          throw new Error('Database verification failed: Initial playback state was inserted, but query returned nothing.');
-        }
-
-        // 4. Subscribe the room to Realtime
-        const channel = supabase.channel(`syncwave-realtime-room-${newRoom.id}`);
-        await channel.subscribe();
-
-        writeLog('success', 'Lounge synced', `Successfully generated Sound Lounge "${createName}" [${activeCode}]`);
-        
-        // Close modal & route user to lounge screen
-        setShowCreateModal(false);
-        router.push(`/room/${activeCode}`);
-      } catch (innerErr: any) {
-        console.warn('[SyncWave Rollback] Deleting partially-created room:', newRoom.id);
-        await supabase.from('rooms').delete().eq('id', newRoom.id);
-        throw innerErr;
-      }
+      writeLog('success', 'Lounge synced', `Successfully generated Sound Lounge "${createName}" [${activeCode}]`);
+      setShowCreateModal(false);
+      router.push(`/room/${activeCode}`);
     } catch (err: any) {
       console.error('Failed to instantiate room:', err);
       setCreateError(err.message || 'Error occurred while creating lounge session.');
@@ -312,95 +196,43 @@ export default function Home() {
     setJoiningRoom(true);
     setJoinError(null);
 
-    const supabase = getSupabase() as any;
-    if (!supabase) {
-      showToast("⚠️ SyncWave hit a temporary glitch.", "error");
-      setJoiningRoom(false);
-      return;
-    }
-
     try {
-      // --- STEP 2 DIAGNOSTIC PRINT ---
-      const supabaseUrlStep2 = process.env.NEXT_PUBLIC_SUPABASE_URL || 'undefined';
-      const projectRefStep2 = getProjectRef(supabaseUrlStep2);
-      const anonKeyPrefix = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.substring(0, 15) : 'undefined';
+      const q = query(collection(db, "rooms"), where("slug", "==", formattedCode));
+      const snap = await getDocs(q);
 
-      console.log('=== [SyncWave Step 2 Trace: Pre-Join/Redirect Device Info] ===');
-      console.log('NEXT_PUBLIC_SUPABASE_URL:', supabaseUrlStep2);
-      console.log('Project Reference:', projectRefStep2);
-      console.log('Anon Key prefix:', anonKeyPrefix);
-      console.log('Room Code:', joinCode);
-      console.log('Normalized Room Code:', formattedCode);
-      console.log('===============================================================');
-
-      // 1. Verify if room exists in active database registries using the exact requested query pattern
-      const { data: roomMatch, error: selectError } = await supabase
-        .from("rooms")
-        .select("*")
-        .eq("slug", formattedCode)
-        .single();
-
-      if (selectError && selectError.code !== 'PGRST116') {
-        console.error('[SyncWave Join Debug] Supabase query error:', selectError.message);
-      }
-
-      writeLog('info', 'DEBUG JOIN', `Entered: "${joinCode}", Normalized: "${formattedCode}", Column searched: "slug", Supabase query: SELECT * FROM rooms WHERE slug = '${formattedCode}', Returned count: ${roomMatch ? 1 : 0}`);
-
-      if (selectError && selectError.code !== 'PGRST116') {
-        showToast("⚠️ SyncWave hit a temporary glitch.", "error");
-        throw selectError;
-      }
-
-      if (!roomMatch) {
-        // --- STEP 6 DIAGNOSTIC PRINT ---
-        console.log('=== [SyncWave Step 6 Trace: Room Not Found Query Result] ===');
-        console.log(JSON.stringify({
-          roomCode: joinCode,
-          normalizedCode: formattedCode,
-          supabaseUrl: supabaseUrlStep2,
-          projectRef: projectRefStep2,
-          query: `SELECT * FROM rooms WHERE slug = '${formattedCode}'`,
-          rowsReturned: 0,
-          roomObject: null,
-          error: selectError ? {
-            code: selectError.code,
-            message: selectError.message,
-            details: selectError.details,
-            hint: selectError.hint
-          } : null
-        }, null, 2));
-        console.log('============================================================');
-
+      if (snap.empty) {
         showToast("👀 We couldn't find that lounge.\nDouble-check the code or ask your friend for a fresh invite.", "error");
         writeLog('error', 'Lounge synced', `Lounge code "${formattedCode}" is inactive or missing.`);
         setJoiningRoom(false);
         return;
       }
 
+      const roomMatch = { id: snap.docs[0].id, ...snap.docs[0].data() } as any;
       setVerifiedRoomMatch(roomMatch);
 
-      // 2. Check if banned / route user contextually
       if (user) {
-        const { data: bannedCheck } = await supabase
-          .from('room_members')
-          .select('*')
-          .eq('room_id', roomMatch.id)
-          .eq('user_id', user.id)
-          .maybeSingle();
+        const memberQ = query(
+          collection(db, 'room_members'),
+          where('room_id', '==', roomMatch.id),
+          where('user_id', '==', user.uid)
+        );
+        const memberSnap = await getDocs(memberQ);
+        let isBanned = false;
+        memberSnap.forEach((d) => {
+          if (d.data().is_banned) isBanned = true;
+        });
 
-        if (bannedCheck?.is_banned) {
+        if (isBanned) {
           showToast("You are banned from entering this room.", "error");
           setJoiningRoom(false);
           return;
         }
 
-        // Just push to room page! The room page handles authenticated joining nicely
         writeLog('success', 'Lounge synced', `Authorized user joining lounge: "${roomMatch.name}" [${formattedCode}]`);
         setShowJoinModal(false);
         setJoiningRoom(false);
         router.push(`/room/${formattedCode}`);
       } else {
-        // Unauthenticated visitor -> Ask ONLY Display Name next
         setJoinStep(2);
         setJoiningRoom(false);
       }
@@ -419,50 +251,41 @@ export default function Home() {
     setJoiningRoom(true);
     setJoinError(null);
 
-    const supabase = getSupabase() as any;
-    if (!supabase) {
-      setJoinError('Supabase database client could not be loaded.');
-      setJoiningRoom(false);
-      return;
-    }
-
     const formattedCode = verifiedRoomMatch.slug.toUpperCase();
 
     try {
-      // Resolve unique display name for guest
       const safeName = await getUniqueGuestName(verifiedRoomMatch.id, guestDisplayName.trim());
 
-      // Check if display name is banned
-      const { data: bannedCheck } = await supabase
-        .from('room_members')
-        .select('*')
-        .eq('room_id', verifiedRoomMatch.id)
-        .eq('display_name', safeName)
-        .maybeSingle();
+      const memberQ = query(
+        collection(db, 'room_members'),
+        where('room_id', '==', verifiedRoomMatch.id),
+        where('display_name', '==', safeName)
+      );
+      const memberSnap = await getDocs(memberQ);
+      let isBanned = false;
+      memberSnap.forEach((d) => {
+        if (d.data().is_banned) isBanned = true;
+      });
 
-      if (bannedCheck?.is_banned) {
+      if (isBanned) {
         setJoinError('This name is banned from entering this room.');
         setJoiningRoom(false);
         return;
       }
 
-      // Generate IDs
       const guestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
 
-      // Safe insertion of guest member row
-      const { error: insertError } = await supabase
-        .from('room_members')
-        .insert({
-          room_id: verifiedRoomMatch.id,
-          guest_id: guestId,
-          display_name: safeName,
-          session_id: sessionId
-        } as any);
+      await addDoc(collection(db, 'room_members'), {
+        room_id: verifiedRoomMatch.id,
+        guest_id: guestId,
+        display_name: safeName,
+        session_id: sessionId,
+        is_muted: false,
+        is_banned: false,
+        joined_at: new Date().toISOString(),
+      });
 
-      if (insertError) throw insertError;
-
-      // Persist guest credentials locally in localStorage
       if (typeof window !== 'undefined') {
         localStorage.setItem(`syncwave-guest-${formattedCode}`, JSON.stringify({
           guestId,

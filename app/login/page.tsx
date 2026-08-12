@@ -3,7 +3,8 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getSupabase } from '@/lib/supabase';
+import { auth, isFirebaseConfigured } from '@/lib/firebase';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
@@ -20,15 +21,12 @@ export default function LoginPage() {
 
   React.useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsPendingCreate(true);
     }
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Prevent duplicate requests
     if (submitting) return;
 
     if (!email.trim() || !password) {
@@ -36,7 +34,6 @@ export default function LoginPage() {
       return;
     }
 
-    // Client-side email format check
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email.trim())) {
       setErrorMsg('Please enter a valid email address.');
@@ -49,47 +46,25 @@ export default function LoginPage() {
 
     writeLog('info', 'Login started', `Executing login transaction for: ${email}`);
 
-    const supabase = getSupabase();
-    if (!supabase) {
-      setErrorMsg('Supabase client engine is unconfigured in this applet.');
+    if (!isFirebaseConfigured()) {
+      setErrorMsg('Firebase engine is unconfigured in this applet.');
       setSubmitting(false);
       return;
     }
 
-    // 15 seconds promise timeout constraint
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Authenticating handshakes took longer than 15s. Operation aborted.'));
-      }, 15000);
-      if (timer && typeof timer.unref === 'function') {
-        timer.unref();
-      }
-    });
-
-    const actionPromise = supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password: password,
-    });
-
     try {
-      const { data, error } = await Promise.race([actionPromise, timeoutPromise]);
+      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const user = userCredential.user;
 
-      if (error) {
-        throw error;
-      }
-
-      if (data?.user) {
-        writeLog('success', 'Login success', `Confirmed security signature for identity: ${data.user.email}`);
-        
-        // Ensure user's profile database row is successfully retrieved/created before considering login successful
+      if (user) {
+        writeLog('success', 'Login success', `Confirmed identity: ${user.email}`);
         setSuccessMsg('Verifying your user profile...');
-        
+
         try {
-          await getOrCreateProfile(data.user.id, data.user.email || '');
-          writeLog('success', 'Profile loaded', `Verified and synchronized database profile for: ${data.user.id}`);
+          await getOrCreateProfile(user.uid, user.email || '');
+          writeLog('success', 'Profile loaded', `Verified profile for: ${user.uid}`);
           setSuccessMsg('Access approved. Redirecting to your Wave Dashboard...');
-          
-          // Let local storage token write set and redirect
+
           setTimeout(() => {
             const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
             if (pending) {
@@ -100,12 +75,9 @@ export default function LoginPage() {
           }, 800);
         } catch (profileErr: any) {
           writeLog('error', 'Login failure', `Profile constraint failed: ${profileErr.message}`);
-          // Do not allow authentication to succeed without a valid profile record! Sign them out!
-          await supabase.auth.signOut();
+          await auth.signOut();
           throw new Error(profileErr.message || 'We could not load your user profile record.');
         }
-      } else {
-        throw new Error('No user context returned from session handshakes.');
       }
     } catch (err: any) {
       writeLog('error', 'Login failure', `Login transaction aborted: ${err.message || err}`);
@@ -117,8 +89,6 @@ export default function LoginPage() {
   return (
     <div id="login-viewport" className="min-h-screen flex items-center justify-center p-4 bg-stone-50 select-none">
       <div id="login-card" className="w-full max-w-md bg-white border border-stone-200/80 rounded-2xl shadow-xl shadow-stone-100 p-6 md:p-8 flex flex-col space-y-6">
-        
-        {/* Crest logo */}
         <div id="login-brand" className="space-y-1.5 text-center">
           <div className="mx-auto bg-stone-900 text-stone-50 w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-stone-200 border border-stone-800">
             <Activity className="w-5 h-5 animate-pulse text-amber-400" />
@@ -133,19 +103,12 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Message Callouts */}
         {errorMsg && (
           <div id="login-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-semibold text-rose-900">Handshake Rejected</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
-              <button 
-                onClick={handleLogin}
-                className="mt-2 text-[11px] font-semibold text-rose-800 underline hover:text-rose-950 block transition"
-              >
-                Retry Request
-              </button>
             </div>
           </div>
         )}
@@ -160,7 +123,6 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Credentials Form */}
         <form id="login-form" onSubmit={handleLogin} className="space-y-4">
           <div className="space-y-1">
             <label className="text-[11px] font-mono uppercase tracking-wider text-stone-500 block">Email Address</label>
@@ -225,7 +187,6 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {/* Footer toggle */}
         <div id="login-footer" className="text-center pt-2 border-t border-stone-100">
           <p className="text-xs text-stone-500">
             Need a secure wave profile?{' '}
@@ -237,7 +198,6 @@ export default function LoginPage() {
             </Link>
           </p>
         </div>
-
       </div>
     </div>
   );

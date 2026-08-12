@@ -1,5 +1,5 @@
-import { getSupabase } from './supabase';
-import { writeLog } from './logger';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from './firebase';
 
 export interface Room {
   id: string;
@@ -23,7 +23,6 @@ export interface RoomMember {
   is_muted: boolean;
   is_banned: boolean;
   joined_at: string;
-  // Extends profiles
   profiles?: {
     display_name: string;
     username: string;
@@ -31,13 +30,9 @@ export interface RoomMember {
   };
 }
 
-/**
- * Generates a highly unique, readable, and uppercase 6-character room slug/code.
- */
 export function generateRoomCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No visually ambiguous characters (0/O, 1/I)
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let result = '';
-  // Combine timestamp elements to avoid immediate repeats even if called concurrently
   for (let i = 0; i < 6; i++) {
     const r = Math.floor(Math.random() * chars.length);
     result += chars.charAt(r);
@@ -45,30 +40,16 @@ export function generateRoomCode(): string {
   return result;
 }
 
-/**
- * Validates display name collisions and suffixes appropriately (e.g. Sai, Sai-1, Sai-2)
- */
 export async function getUniqueGuestName(roomId: string, baseName: string): Promise<string> {
-  const supabase = getSupabase();
-  if (!supabase) return baseName;
-
   try {
     const trimmed = baseName.trim();
-    // Fetch all current members/guests in the room
-    const { data, error } = await supabase
-      .from('room_members')
-      .select('display_name, profiles(display_name)')
-      .eq('room_id', roomId);
+    const q = query(collection(db, 'room_members'), where('room_id', '==', roomId));
+    const snap = await getDocs(q);
 
-    if (error) {
-      console.error('[Room Engine] Error checking name collisions:', error.message);
-      return trimmed;
-    }
-
-    // Accumulate all active names (profiles display_name OR guest display_name)
     const existingNames = new Set<string>();
-    data?.forEach((row: any) => {
-      const name = row.profiles?.display_name || row.display_name;
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      const name = data.profiles?.display_name || data.display_name;
       if (name) {
         existingNames.add(name.toLowerCase());
       }
@@ -78,7 +59,6 @@ export async function getUniqueGuestName(roomId: string, baseName: string): Prom
       return trimmed;
     }
 
-    // Enforce sequence: Sai-1, Sai-2, etc.
     let index = 1;
     while (existingNames.has(`${trimmed.toLowerCase()}-${index}`)) {
       index++;

@@ -1,5 +1,5 @@
 export interface PlaybackState {
-  id: string;
+  id?: string;
   room_id: string;
   media_url: string | null;
   media_type: string | null;
@@ -7,10 +7,10 @@ export interface PlaybackState {
   current_time: number;
   duration: number;
   playback_rate: number;
-  updated_by: string | null;
+  updated_by?: string | null;
   last_sync_at: string;
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export type RoomPlaybackEvent = 'play' | 'pause' | 'seek' | 'media_change' | 'sync_request' | 'rate_change';
@@ -43,4 +43,3 @@ export interface MediaQueueItem {
   is_played: boolean;
   created_at: string;
 }
-
