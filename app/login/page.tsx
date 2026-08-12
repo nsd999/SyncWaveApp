@@ -70,6 +70,7 @@ export default function LoginPage() {
       }
     } catch (err: any) {
       writeLog('error', 'Google Login failure', `Login transaction aborted: ${err.message || err}`);
+      setSuccessMsg(null);
       setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
@@ -131,6 +132,7 @@ export default function LoginPage() {
       }
     } catch (err: any) {
       writeLog('error', 'Login failure', `Login transaction aborted: ${err.message || err}`);
+      setSuccessMsg(null);
       setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }

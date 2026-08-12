@@ -75,6 +75,7 @@ export default function SignupPage() {
       }
     } catch (err: any) {
       writeLog('error', 'Google Signup failure', `Signup sequence aborted: ${err.message || err}`);
+      setSuccessMsg(null);
       setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
@@ -142,6 +143,7 @@ export default function SignupPage() {
       }
     } catch (err: any) {
       writeLog('error', 'Signup failure', `Signup sequence aborted: ${err.message || err}`);
+      setSuccessMsg(null);
       setErrorMsg(getFriendlyErrorMessage(err));
       setSubmitting(false);
     }
