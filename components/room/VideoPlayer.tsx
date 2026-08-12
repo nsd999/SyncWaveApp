@@ -5,7 +5,7 @@ import ReactPlayer from 'react-player';
 
 export function VideoPlayer() {
   const { roomMetadata, currentMember, playbackState, isTyping } = useRoomStore();
-  const playerRef = React.useRef<ReactPlayer>(null);
+  const playerRef = React.useRef<any>(null);
   
   const [isPlayingLocal, setIsPlayingLocal] = React.useState(false);
   const [volume, setVolume] = React.useState(0.8);
@@ -66,7 +66,7 @@ export function VideoPlayer() {
           controls={false}
           style={{ position: 'absolute', top: 0, left: 0 }}
           config={{
-            youtube: { playerVars: { disablekb: 1, modestbranding: 1, rel: 0 } },
+            youtube: { playerVars: { disablekb: 1, modestbranding: 1, rel: 0 } as any },
             file: { attributes: { crossOrigin: "anonymous" } }
           }}
         />
