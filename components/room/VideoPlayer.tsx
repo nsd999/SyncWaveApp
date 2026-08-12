@@ -54,6 +54,7 @@ export function VideoPlayer() {
       </div>
 
       <div className="flex-1 relative w-full h-full bg-stone-950 flex items-center justify-center overflow-hidden group/player">
+        {/* @ts-ignore */}
         <ReactPlayer
           ref={playerRef}
           url={mediaUrl}
@@ -66,9 +67,9 @@ export function VideoPlayer() {
           controls={false}
           style={{ position: 'absolute', top: 0, left: 0 }}
           config={{
-            youtube: { playerVars: { disablekb: 1, modestbranding: 1, rel: 0 } as any },
+            youtube: { playerVars: { disablekb: 1, modestbranding: 1, rel: 0 } },
             file: { attributes: { crossOrigin: "anonymous" } }
-          }}
+          } as any}
         />
 
         {mediaType === 'audio' && (
