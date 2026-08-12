@@ -3,6 +3,8 @@ import { useRoomStore } from '@/store/useRoomStore';
 import { Disc, Play, Pause, Music, Tv, Volume2, VolumeX, SkipForward, Maximize, RotateCcw, RotateCw } from 'lucide-react';
 import ReactPlayer from 'react-player';
 
+const AnyPlayer = ReactPlayer as any;
+
 export function VideoPlayer() {
   const { roomMetadata, currentMember, playbackState, isTyping } = useRoomStore();
   const playerRef = React.useRef<any>(null);
@@ -54,8 +56,7 @@ export function VideoPlayer() {
       </div>
 
       <div className="flex-1 relative w-full h-full bg-stone-950 flex items-center justify-center overflow-hidden group/player">
-        {/* @ts-ignore */}
-        <ReactPlayer
+        <AnyPlayer
           ref={playerRef}
           url={mediaUrl}
           playing={isPlayingLocal}
