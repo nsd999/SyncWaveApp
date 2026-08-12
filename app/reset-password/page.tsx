@@ -3,8 +3,7 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { auth, isFirebaseConfigured } from '@/lib/firebase';
-import { updatePassword } from 'firebase/auth';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Lock } from 'lucide-react';
@@ -18,9 +17,11 @@ export default function ResetPasswordPage() {
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (!auth.currentUser) {
-      writeLog('warn', 'Password recovery', 'Reset landing loaded without active session');
-    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        writeLog('warn', 'Password recovery', 'Reset landing loaded without active session');
+      }
+    });
   }, []);
 
   const handlePasswordReset = async (e: React.FormEvent) => {
@@ -46,14 +47,16 @@ export default function ResetPasswordPage() {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!isFirebaseConfigured() || !auth.currentUser) {
-      setErrorMsg('Not logged in or Firebase unconfigured.');
+    if (!isSupabaseConfigured()) {
+      setErrorMsg('Supabase unconfigured.');
       setSubmitting(false);
       return;
     }
 
     try {
-      await updatePassword(auth.currentUser, password);
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      
       writeLog('success', 'Password reset', 'Successfully updated password');
       setSuccessMsg('Your security password keys have been refreshed!');
       setTimeout(() => {

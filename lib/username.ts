@@ -1,5 +1,4 @@
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from './firebase';
+import { supabase } from './supabase';
 
 export function cleanBaseUsername(input: string): string {
   const cleaned = input
@@ -21,10 +20,12 @@ export async function generateUniqueUsername(email: string): Promise<string> {
     const candidate = attempt === 0 ? baseUsername : `${baseUsername}${attempt}`;
 
     try {
-      const q = query(collection(db, 'profiles'), where('username', '==', candidate));
-      const querySnap = await getDocs(q);
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('username')
+        .eq('username', candidate);
 
-      if (querySnap.empty) {
+      if (!error && (!data || data.length === 0)) {
         return candidate.substring(0, 30);
       }
     } catch (e) {

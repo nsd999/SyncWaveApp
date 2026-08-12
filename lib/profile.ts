@@ -1,5 +1,4 @@
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { db } from './firebase';
+import { supabase } from './supabase';
 import { generateUniqueUsername } from './username';
 
 export interface Profile {
@@ -17,40 +16,70 @@ export async function getOrCreateProfile(
   email: string,
   displayName?: string
 ): Promise<Profile> {
-  const docRef = doc(db, 'profiles', userId);
-  const docSnap = await getDoc(docRef);
-
-  if (docSnap.exists()) {
-    return { id: docSnap.id, ...docSnap.data() } as Profile;
-  }
-
-  const uniqueUsername = await generateUniqueUsername(email);
   const cleanDisplay = displayName || email.split('@')[0] || 'Member';
+  
+  try {
+    const { data: existingProfile, error: getError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
 
-  const newProfile: Profile = {
-    id: userId,
-    email: email.toLowerCase().trim(),
-    username: uniqueUsername,
-    display_name: cleanDisplay,
-    avatar_url: `https://picsum.photos/seed/${uniqueUsername}/150`,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
+    if (existingProfile) {
+      return existingProfile as Profile;
+    }
 
-  await setDoc(docRef, newProfile);
-  return newProfile;
+    const uniqueUsername = await generateUniqueUsername(email);
+    const newProfile = {
+      id: userId,
+      email: email.toLowerCase().trim(),
+      username: uniqueUsername,
+      display_name: cleanDisplay,
+      avatar_url: `https://picsum.photos/seed/${uniqueUsername}/150`
+    };
+
+    const { data: insertedProfile, error: insertError } = await supabase
+      .from('profiles')
+      .insert([newProfile])
+      .select()
+      .single();
+
+    if (insertError) {
+      console.warn('Profile insertion error:', insertError);
+      throw insertError;
+    }
+    
+    return insertedProfile as Profile;
+  } catch (err: any) {
+    console.error('Supabase profile store error:', err);
+    return {
+      id: userId,
+      email: email.toLowerCase().trim(),
+      username: email.split('@')[0] || 'member',
+      display_name: cleanDisplay,
+      avatar_url: `https://picsum.photos/seed/${userId}/150`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
 }
 
 export async function updateProfile(
   userId: string,
   updates: Partial<Omit<Profile, 'id' | 'email' | 'created_at'>>
 ): Promise<Profile> {
-  const docRef = doc(db, 'profiles', userId);
   const updatedFields = {
     ...updates,
     updated_at: new Date().toISOString(),
   };
-  await updateDoc(docRef, updatedFields);
-  const updatedSnap = await getDoc(docRef);
-  return { id: updatedSnap.id, ...updatedSnap.data() } as Profile;
+  
+  const { data, error } = await supabase
+    .from('profiles')
+    .update(updatedFields)
+    .eq('id', userId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Profile;
 }

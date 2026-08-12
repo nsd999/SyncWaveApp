@@ -1,5 +1,4 @@
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from './firebase';
+import { supabase } from './supabase';
 
 export interface Room {
   id: string;
@@ -43,17 +42,24 @@ export function generateRoomCode(): string {
 export async function getUniqueGuestName(roomId: string, baseName: string): Promise<string> {
   try {
     const trimmed = baseName.trim();
-    const q = query(collection(db, 'room_members'), where('room_id', '==', roomId));
-    const snap = await getDocs(q);
+    
+    const { data, error } = await supabase
+      .from('room_members')
+      .select('display_name, profiles(display_name)')
+      .eq('room_id', roomId);
+      
+    if (error) throw error;
 
     const existingNames = new Set<string>();
-    snap.forEach((docSnap) => {
-      const data = docSnap.data();
-      const name = data.profiles?.display_name || data.display_name;
-      if (name) {
-        existingNames.add(name.toLowerCase());
-      }
-    });
+    
+    if (data) {
+      data.forEach((member: any) => {
+        const name = member.profiles?.display_name || member.display_name;
+        if (name) {
+          existingNames.add(name.toLowerCase());
+        }
+      });
+    }
 
     if (!existingNames.has(trimmed.toLowerCase())) {
       return trimmed;

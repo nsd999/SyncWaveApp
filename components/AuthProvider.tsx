@@ -1,8 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { auth, isFirebaseConfigured } from '@/lib/firebase';
-import { onAuthStateChanged, signOut as firebaseSignOut, User } from 'firebase/auth';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { User } from '@supabase/supabase-js';
 import { getOrCreateProfile, Profile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 
@@ -21,12 +21,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = React.useState<Profile | null>(null);
   const [loading, setLoading] = React.useState(true);
 
-  const configured = isFirebaseConfigured();
+  const configured = isSupabaseConfigured();
 
   const refreshProfile = React.useCallback(async () => {
     if (!user) return;
     try {
-      const activeProfile = await getOrCreateProfile(user.uid, user.email || '');
+      const activeProfile = await getOrCreateProfile(user.id, user.email || '');
       setProfile(activeProfile);
     } catch (err: any) {
       writeLog('error', 'Profile recovery', `Error refreshing profile: ${err.message}`);
@@ -39,13 +39,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (activeUser) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const activeUser = session?.user || null;
+      setUser(activeUser);
+      if (!activeUser) setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const activeUser = session?.user || null;
       setUser(activeUser);
 
       if (activeUser) {
         writeLog('success', 'Session restored', `Auth session restored for ${activeUser.email}`);
         try {
-          const p = await getOrCreateProfile(activeUser.uid, activeUser.email || '');
+          const p = await getOrCreateProfile(activeUser.id, activeUser.email || '');
           setProfile(p);
         } catch (e: any) {
           writeLog('error', 'Profile recovery', `Database profile error: ${e.message}`);
@@ -56,13 +63,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => subscription.unsubscribe();
   }, [configured]);
 
   const signOut = async () => {
     try {
       writeLog('info', 'Login started', 'Initiating logout request...');
-      await firebaseSignOut(auth);
+      await supabase.auth.signOut();
     } catch (err: any) {
       writeLog('error', 'Login failure', `SignOut warning: ${err.message}`);
     }

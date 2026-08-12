@@ -2,8 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { auth, isFirebaseConfigured } from '@/lib/firebase';
-import { sendPasswordResetEmail } from 'firebase/auth';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Mail, ShieldAlert, CheckCircle, ArrowRight, Loader2, Key } from 'lucide-react';
@@ -35,14 +34,17 @@ export default function ForgotPasswordPage() {
 
     writeLog('info', 'Password recovery', `Sending password reset challenge to: ${email}`);
 
-    if (!isFirebaseConfigured()) {
-      setErrorMsg('Firebase engine is unconfigured.');
+    if (!isSupabaseConfigured()) {
+      setErrorMsg('Supabase engine is unconfigured.');
       setSubmitting(false);
       return;
     }
 
     try {
-      await sendPasswordResetEmail(auth, email.trim());
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) throw error;
       writeLog('success', 'Password recovery', `Successfully dispatched password reset endpoint for user: ${email}`);
       setSuccessMsg('Reset invitation dispatched! Please check your email inbox for a link to establish a new password.');
       setEmail('');

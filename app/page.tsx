@@ -4,8 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
-import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, addDoc, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 import { generateRoomCode, getUniqueGuestName } from '@/lib/room';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
@@ -142,23 +141,29 @@ export default function Home() {
         name: createName.trim(),
         slug: activeCode,
         description: createDesc.trim() || null,
-        host_id: user.uid,
+        host_id: user.id,
         is_private: createIsPrivate,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
-      const roomDocRef = await addDoc(collection(db, 'rooms'), roomData);
-      const roomId = roomDocRef.id;
+      const { data: roomDoc, error: roomError } = await supabase
+        .from('rooms')
+        .insert([roomData])
+        .select()
+        .single();
+        
+      if (roomError) throw roomError;
+      const roomId = roomDoc.id;
 
-      await addDoc(collection(db, 'room_members'), {
+      await supabase.from('room_members').insert([{
         room_id: roomId,
-        user_id: user.uid,
+        user_id: user.id,
         display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host',
         is_muted: false,
         is_banned: false,
         joined_at: new Date().toISOString(),
-      });
+      }]);
 
       const defaultState = {
         room_id: roomId,
@@ -171,7 +176,7 @@ export default function Home() {
         last_sync_at: new Date().toISOString()
       };
 
-      await setDoc(doc(db, 'playback_state', roomId), defaultState);
+      await supabase.from('playback_state').insert([defaultState]);
 
       writeLog('success', 'Lounge synced', `Successfully generated Sound Lounge "${createName}" [${activeCode}]`);
       setShowCreateModal(false);
@@ -197,30 +202,35 @@ export default function Home() {
     setJoinError(null);
 
     try {
-      const q = query(collection(db, "rooms"), where("slug", "==", formattedCode));
-      const snap = await getDocs(q);
+      const { data: snap, error: snapError } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('slug', formattedCode)
+        .single();
 
-      if (snap.empty) {
+      if (snapError || !snap) {
         showToast("👀 We couldn't find that lounge.\nDouble-check the code or ask your friend for a fresh invite.", "error");
         writeLog('error', 'Lounge synced', `Lounge code "${formattedCode}" is inactive or missing.`);
         setJoiningRoom(false);
         return;
       }
 
-      const roomMatch = { id: snap.docs[0].id, ...snap.docs[0].data() } as any;
+      const roomMatch = snap as any;
       setVerifiedRoomMatch(roomMatch);
 
       if (user) {
-        const memberQ = query(
-          collection(db, 'room_members'),
-          where('room_id', '==', roomMatch.id),
-          where('user_id', '==', user.uid)
-        );
-        const memberSnap = await getDocs(memberQ);
+        const { data: memberSnap } = await supabase
+          .from('room_members')
+          .select('is_banned')
+          .eq('room_id', roomMatch.id)
+          .eq('user_id', user.id);
+          
         let isBanned = false;
-        memberSnap.forEach((d) => {
-          if (d.data().is_banned) isBanned = true;
-        });
+        if (memberSnap) {
+          memberSnap.forEach((d: any) => {
+            if (d.is_banned) isBanned = true;
+          });
+        }
 
         if (isBanned) {
           showToast("You are banned from entering this room.", "error");
@@ -256,16 +266,18 @@ export default function Home() {
     try {
       const safeName = await getUniqueGuestName(verifiedRoomMatch.id, guestDisplayName.trim());
 
-      const memberQ = query(
-        collection(db, 'room_members'),
-        where('room_id', '==', verifiedRoomMatch.id),
-        where('display_name', '==', safeName)
-      );
-      const memberSnap = await getDocs(memberQ);
+      const { data: memberSnap } = await supabase
+        .from('room_members')
+        .select('is_banned')
+        .eq('room_id', verifiedRoomMatch.id)
+        .eq('display_name', safeName);
+        
       let isBanned = false;
-      memberSnap.forEach((d) => {
-        if (d.data().is_banned) isBanned = true;
-      });
+      if (memberSnap) {
+        memberSnap.forEach((d: any) => {
+          if (d.is_banned) isBanned = true;
+        });
+      }
 
       if (isBanned) {
         setJoinError('This name is banned from entering this room.');
@@ -276,7 +288,7 @@ export default function Home() {
       const guestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
 
-      await addDoc(collection(db, 'room_members'), {
+      await supabase.from('room_members').insert([{
         room_id: verifiedRoomMatch.id,
         guest_id: guestId,
         display_name: safeName,
@@ -284,7 +296,7 @@ export default function Home() {
         is_muted: false,
         is_banned: false,
         joined_at: new Date().toISOString(),
-      });
+      }]);
 
       if (typeof window !== 'undefined') {
         localStorage.setItem(`syncwave-guest-${formattedCode}`, JSON.stringify({

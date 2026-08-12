@@ -1,16 +1,4 @@
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  doc, 
-  getDoc, 
-  setDoc, 
-  updateDoc, 
-  addDoc, 
-  orderBy 
-} from 'firebase/firestore';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 
 export function normalizeRoomSlug(slug: string): string {
   return slug.trim().toUpperCase();
@@ -18,62 +6,47 @@ export function normalizeRoomSlug(slug: string): string {
 
 export async function findRoomBySlug(slug: string): Promise<any> {
   const normalized = normalizeRoomSlug(slug);
-  const q = query(collection(db, 'rooms'), where('slug', '==', normalized));
-  const snap = await getDocs(q);
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...d.data() };
+  const { data, error } = await supabase.from('rooms').select('*').eq('slug', normalized).single();
+  if (error || !data) return null;
+  return data;
 }
 
 export async function getRoomMembers(roomId: string): Promise<any[]> {
-  const q = query(
-    collection(db, 'room_members'),
-    where('room_id', '==', roomId),
-    where('is_banned', '==', false)
-  );
-  const snap = await getDocs(q);
-  const members: any[] = [];
-  snap.forEach((d) => members.push({ id: d.id, ...d.data() }));
-  return members;
+  const { data, error } = await supabase.from('room_members').select('*').eq('room_id', roomId).eq('is_banned', false);
+  if (error) return [];
+  return data;
 }
 
 export async function getPlaybackState(roomId: string): Promise<any> {
-  const snap = await getDoc(doc(db, 'playback_state', roomId));
-  if (!snap.exists()) return null;
-  return { id: snap.id, ...snap.data() };
+  const { data, error } = await supabase.from('playback_state').select('*').eq('room_id', roomId).single();
+  if (error || !data) return null;
+  return data;
 }
 
 export async function updatePlaybackState(roomId: string, updates: any): Promise<any> {
-  const docRef = doc(db, 'playback_state', roomId);
-  const snap = await getDoc(docRef);
-
   const payload = {
     ...updates,
     last_sync_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
-  if (snap.exists()) {
-    await updateDoc(docRef, payload);
+  const { data: existing } = await supabase.from('playback_state').select('*').eq('room_id', roomId).single();
+  if (existing) {
+    const { data, error } = await supabase.from('playback_state').update(payload).eq('room_id', roomId).select().single();
+    if (error) throw error;
+    return data;
   } else {
-    await setDoc(docRef, { room_id: roomId, ...payload });
+    const insertPayload = { room_id: roomId, ...payload };
+    const { data, error } = await supabase.from('playback_state').insert([insertPayload]).select().single();
+    if (error) throw error;
+    return data;
   }
-
-  const updatedSnap = await getDoc(docRef);
-  return { id: updatedSnap.id, ...updatedSnap.data() };
 }
 
 export async function getRoomQueue(roomId: string): Promise<any[]> {
-  const q = query(
-    collection(db, 'media_queue'),
-    where('room_id', '==', roomId),
-    where('is_played', '==', false),
-    orderBy('position', 'asc')
-  );
-  const snap = await getDocs(q);
-  const items: any[] = [];
-  snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
-  return items;
+  const { data, error } = await supabase.from('media_queue').select('*').eq('room_id', roomId).eq('is_played', false).order('position', { ascending: true });
+  if (error) return [];
+  return data;
 }
 
 export async function addMediaToQueue(
@@ -101,7 +74,8 @@ export async function addMediaToQueue(
     is_played: false
   };
 
-  const docRef = await addDoc(collection(db, 'media_queue'), itemData);
+  const { data: inserted, error } = await supabase.from('media_queue').insert([itemData]).select().single();
+  if (error) throw error;
 
   if (currentQueue.length === 0) {
     await updatePlaybackState(roomId, {
@@ -113,7 +87,7 @@ export async function addMediaToQueue(
     });
   }
 
-  return { id: docRef.id, ...itemData };
+  return inserted;
 }
 
 export async function skipTrack(roomId: string): Promise<any> {
@@ -130,7 +104,7 @@ export async function skipTrack(roomId: string): Promise<any> {
   }
 
   const currentTrack = currentQueue[0];
-  await updateDoc(doc(db, 'media_queue', currentTrack.id), { is_played: true });
+  await supabase.from('media_queue').update({ is_played: true }).eq('id', currentTrack.id);
 
   const remainingQueue = currentQueue.slice(1);
   if (remainingQueue.length > 0) {
@@ -160,11 +134,9 @@ export async function upsertTelegramUser(tgUser: {
   last_name?: string;
   linked_profile_id?: string;
 }): Promise<any> {
-  const docRef = doc(db, 'telegram_users', String(tgUser.telegram_user_id));
-  const snap = await getDoc(docRef);
+  const { data: existing } = await supabase.from('telegram_users').select('*').eq('telegram_user_id', tgUser.telegram_user_id).single();
 
-  if (snap.exists()) {
-    const existing = snap.data();
+  if (existing) {
     const updates: any = {
       username: tgUser.username ?? existing.username,
       first_name: tgUser.first_name ?? existing.first_name,
@@ -174,9 +146,9 @@ export async function upsertTelegramUser(tgUser: {
     if (tgUser.linked_profile_id) {
       updates.linked_profile_id = tgUser.linked_profile_id;
     }
-    await updateDoc(docRef, updates);
-    const updatedSnap = await getDoc(docRef);
-    return { id: updatedSnap.id, ...updatedSnap.data() };
+    const { data: updated, error } = await supabase.from('telegram_users').update(updates).eq('telegram_user_id', tgUser.telegram_user_id).select().single();
+    if (error) throw error;
+    return updated;
   } else {
     const payload = {
       telegram_user_id: tgUser.telegram_user_id,
@@ -187,31 +159,28 @@ export async function upsertTelegramUser(tgUser: {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
-    await setDoc(docRef, payload);
-    return { id: docRef.id, ...payload };
+    const { data: inserted, error } = await supabase.from('telegram_users').insert([payload]).select().single();
+    if (error) throw error;
+    return inserted;
   }
 }
 
 export async function getLinkedRoom(chatId: number): Promise<any> {
-  const q = query(collection(db, 'telegram_room_links'), where('telegram_chat_id', '==', chatId));
-  const snap = await getDocs(q);
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...d.data() };
+  const { data, error } = await supabase.from('telegram_room_links').select('*').eq('telegram_chat_id', chatId).single();
+  if (error || !data) return null;
+  return data;
 }
 
 export async function linkChatToRoom(chatId: number, roomId: string, linkedByTgId: number): Promise<any> {
-  const q = query(collection(db, 'telegram_room_links'), where('telegram_chat_id', '==', chatId));
-  const snap = await getDocs(q);
+  const { data: existing } = await supabase.from('telegram_room_links').select('*').eq('telegram_chat_id', chatId).single();
 
-  if (!snap.empty) {
-    const docRef = doc(db, 'telegram_room_links', snap.docs[0].id);
-    await updateDoc(docRef, {
+  if (existing) {
+    const { data: updated, error } = await supabase.from('telegram_room_links').update({
       room_id: roomId,
       linked_by: linkedByTgId,
-    });
-    const updatedSnap = await getDoc(docRef);
-    return { id: updatedSnap.id, ...updatedSnap.data() };
+    }).eq('id', existing.id).select().single();
+    if (error) throw error;
+    return updated;
   } else {
     const payload = {
       room_id: roomId,
@@ -219,32 +188,33 @@ export async function linkChatToRoom(chatId: number, roomId: string, linkedByTgI
       linked_by: linkedByTgId,
       created_at: new Date().toISOString()
     };
-    const docRef = await addDoc(collection(db, 'telegram_room_links'), payload);
-    return { id: docRef.id, ...payload };
+    const { data: inserted, error } = await supabase.from('telegram_room_links').insert([payload]).select().single();
+    if (error) throw error;
+    return inserted;
   }
 }
 
 export async function logTelegramCommand(tgUserId: number, command: string, roomId: string | null, payload: any, status: string): Promise<void> {
   try {
-    await addDoc(collection(db, 'telegram_command_logs'), {
+    await supabase.from('telegram_command_logs').insert([{
       telegram_user_id: tgUserId,
       command,
       room_id: roomId,
       payload: payload ? JSON.stringify(payload) : null,
       status,
       created_at: new Date().toISOString()
-    });
+    }]);
   } catch (e: any) {
     console.error('Error writing telegram command log:', e.message);
   }
 }
 
 export async function isUserHost(tgUserId: number, roomId: string): Promise<boolean> {
-  const tgSnap = await getDoc(doc(db, 'telegram_users', String(tgUserId)));
-  if (!tgSnap.exists() || !tgSnap.data().linked_profile_id) return false;
+  const { data: tgUser, error: tgError } = await supabase.from('telegram_users').select('linked_profile_id').eq('telegram_user_id', tgUserId).single();
+  if (tgError || !tgUser || !tgUser.linked_profile_id) return false;
 
-  const roomSnap = await getDoc(doc(db, 'rooms', roomId));
-  if (!roomSnap.exists()) return false;
+  const { data: room, error: roomError } = await supabase.from('rooms').select('host_id').eq('id', roomId).single();
+  if (roomError || !room) return false;
 
-  return roomSnap.data().host_id === tgSnap.data().linked_profile_id;
+  return room.host_id === tgUser.linked_profile_id;
 }

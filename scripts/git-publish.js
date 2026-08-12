@@ -4,7 +4,7 @@ console.log('\n--- SyncWaveApp Deployment Check & Publish ---');
 
 try {
   console.log('\n[1/3] Running TypeScript Checks...');
-  execSync('npx tsc --noEmit', { stdio: 'inherit' });
+  execSync('npx tsc --noEmit', { stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' } });
   console.log('✅ TypeScript checks passed.');
 
   console.log('\n[2/3] Building for Vercel...');

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { User } from 'firebase/auth';
+import type { User } from '@supabase/supabase-js';
 
 export interface RoomMember {
   id: string;
@@ -32,7 +32,7 @@ export interface PlaybackState {
 export interface RoomState {
   roomCode: string | null;
   roomMetadata: any | null;
-  firebaseConnected: boolean;
+  supabaseConnected: boolean;
   user: User | null;
   currentMember: RoomMember | null;
   members: RoomMember[];
@@ -44,7 +44,7 @@ export interface RoomState {
   // Actions
   setRoomCode: (code: string) => void;
   setRoomMetadata: (data: any) => void;
-  setFirebaseConnected: (connected: boolean) => void;
+  setSupabaseConnected: (connected: boolean) => void;
   setUser: (user: User | null) => void;
   setCurrentMember: (member: RoomMember | null) => void;
   setMembers: (members: RoomMember[]) => void;
@@ -57,7 +57,7 @@ export interface RoomState {
 export const useRoomStore = create<RoomState>((set) => ({
   roomCode: null,
   roomMetadata: null,
-  firebaseConnected: false,
+  supabaseConnected: false,
   user: null,
   currentMember: null,
   members: [],
@@ -68,7 +68,7 @@ export const useRoomStore = create<RoomState>((set) => ({
 
   setRoomCode: (code) => set({ roomCode: code }),
   setRoomMetadata: (data) => set({ roomMetadata: data }),
-  setFirebaseConnected: (connected) => set({ firebaseConnected: connected }),
+  setSupabaseConnected: (connected) => set({ supabaseConnected: connected }),
   setUser: (user) => set({ user }),
   setCurrentMember: (member) => set({ currentMember: member }),
   setMembers: (members) => set({ members }),

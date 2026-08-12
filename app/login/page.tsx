@@ -3,13 +3,11 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { auth, isFirebaseConfigured } from '@/lib/firebase';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity } from 'lucide-react';
-import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -34,40 +32,17 @@ export default function LoginPage() {
 
     writeLog('info', 'Google Login started', `Executing Google login transaction`);
 
-    if (!isFirebaseConfigured()) {
-      setErrorMsg('Firebase engine is unconfigured in this applet.');
+    if (!isSupabaseConfigured()) {
+      setErrorMsg('Supabase engine is unconfigured in this applet.');
       setSubmitting(false);
       return;
     }
 
     try {
-      const provider = new GoogleAuthProvider();
-      const userCredential = await signInWithPopup(auth, provider);
-      const user = userCredential.user;
-
-      if (user) {
-        writeLog('success', 'Google Login success', `Confirmed identity: ${user.email}`);
-        setSuccessMsg('Verifying your user profile...');
-
-        try {
-          await getOrCreateProfile(user.uid, user.email || '', user.displayName || 'Google User');
-          writeLog('success', 'Profile loaded', `Verified profile for: ${user.uid}`);
-          setSuccessMsg('Access approved. Redirecting to your Wave Dashboard...');
-
-          setTimeout(() => {
-            const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-            if (pending) {
-              router.replace('/');
-            } else {
-              router.replace('/dashboard');
-            }
-          }, 800);
-        } catch (profileErr: any) {
-          writeLog('error', 'Login failure', `Profile constraint failed: ${profileErr.message}`);
-          await auth.signOut();
-          throw new Error(profileErr.message || 'We could not load your user profile record.');
-        }
-      }
+      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      if (error) throw error;
+      
+      setSuccessMsg('Redirecting to Google...');
     } catch (err: any) {
       writeLog('error', 'Google Login failure', `Login transaction aborted: ${err.message || err}`);
       setSuccessMsg(null);
@@ -97,23 +72,28 @@ export default function LoginPage() {
 
     writeLog('info', 'Login started', `Executing login transaction for: ${email}`);
 
-    if (!isFirebaseConfigured()) {
-      setErrorMsg('Firebase engine is unconfigured in this applet.');
+    if (!isSupabaseConfigured()) {
+      setErrorMsg('Supabase engine is unconfigured in this applet.');
       setSubmitting(false);
       return;
     }
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const user = userCredential.user;
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password
+      });
+      if (error) throw error;
+      
+      const user = data.user;
 
       if (user) {
         writeLog('success', 'Login success', `Confirmed identity: ${user.email}`);
         setSuccessMsg('Verifying your user profile...');
 
         try {
-          await getOrCreateProfile(user.uid, user.email || '');
-          writeLog('success', 'Profile loaded', `Verified profile for: ${user.uid}`);
+          await getOrCreateProfile(user.id, user.email || '');
+          writeLog('success', 'Profile loaded', `Verified profile for: ${user.id}`);
           setSuccessMsg('Access approved. Redirecting to your Wave Dashboard...');
 
           setTimeout(() => {
@@ -126,7 +106,7 @@ export default function LoginPage() {
           }, 800);
         } catch (profileErr: any) {
           writeLog('error', 'Login failure', `Profile constraint failed: ${profileErr.message}`);
-          await auth.signOut();
+          await supabase.auth.signOut();
           throw new Error(profileErr.message || 'We could not load your user profile record.');
         }
       }

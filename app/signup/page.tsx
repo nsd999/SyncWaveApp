@@ -3,14 +3,12 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { auth, isFirebaseConfigured } from '@/lib/firebase';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { cleanBaseUsername } from '@/lib/username';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity, User } from 'lucide-react';
-import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -38,41 +36,16 @@ export default function SignupPage() {
 
     writeLog('info', 'Google Signup started', `Attempting Google signup`);
 
-    if (!isFirebaseConfigured()) {
-      setErrorMsg('Firebase client is unconfigured in this applet.');
+    if (!isSupabaseConfigured()) {
+      setErrorMsg('Supabase client is unconfigured in this applet.');
       setSubmitting(false);
       return;
     }
 
     try {
-      const provider = new GoogleAuthProvider();
-      const userCredential = await signInWithPopup(auth, provider);
-      const user = userCredential.user;
-
-      if (user) {
-        writeLog('success', 'Google Signup success', `Registered user in Firebase auth: ${user.email}`);
-        setSuccessMsg('Initializing your SyncWave profile...');
-
-        try {
-          const resolvedDisplay = user.displayName || user.email?.split('@')[0] || 'New Member';
-          await getOrCreateProfile(user.uid, user.email || '', resolvedDisplay);
-          writeLog('success', 'Profile created', `Profile created for: ${user.uid}`);
-
-          setSuccessMsg('Account created! Loading dashboard...');
-          setTimeout(() => {
-            const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-            if (pending) {
-              router.replace('/');
-            } else {
-              router.replace('/dashboard');
-            }
-          }, 1000);
-        } catch (profileErr: any) {
-          writeLog('error', 'Signup failure', `Profile creation failed: ${profileErr.message}`);
-          await auth.signOut();
-          throw new Error(profileErr.message || 'We could not establish your user profile record.');
-        }
-      }
+      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      if (error) throw error;
+      setSuccessMsg('Redirecting to Google...');
     } catch (err: any) {
       writeLog('error', 'Google Signup failure', `Signup sequence aborted: ${err.message || err}`);
       setSuccessMsg(null);
@@ -107,15 +80,23 @@ export default function SignupPage() {
 
     writeLog('info', 'Signup started', `Attempting signup for: ${email}`);
 
-    if (!isFirebaseConfigured()) {
-      setErrorMsg('Firebase client is unconfigured in this applet.');
+    if (!isSupabaseConfigured()) {
+      setErrorMsg('Supabase client is unconfigured in this applet.');
       setSubmitting(false);
       return;
     }
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const user = userCredential.user;
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' }
+        }
+      });
+      if (error) throw error;
+      
+      const user = data.user;
 
       if (user) {
         writeLog('success', 'Signup success', `Registered user in Firebase auth: ${user.email}`);
@@ -123,8 +104,8 @@ export default function SignupPage() {
 
         try {
           const resolvedDisplay = displayName.trim() || email.split('@')[0] || 'New Member';
-          await getOrCreateProfile(user.uid, user.email || '', resolvedDisplay);
-          writeLog('success', 'Profile created', `Profile created for: ${user.uid}`);
+          await getOrCreateProfile(user.id, user.email || '', resolvedDisplay);
+          writeLog('success', 'Profile created', `Profile created for: ${user.id}`);
 
           setSuccessMsg('Account created! Loading dashboard...');
           setTimeout(() => {
@@ -137,7 +118,7 @@ export default function SignupPage() {
           }, 1000);
         } catch (profileErr: any) {
           writeLog('error', 'Signup failure', `Profile creation failed: ${profileErr.message}`);
-          await auth.signOut();
+          await supabase.auth.signOut();
           throw new Error(profileErr.message || 'We could not establish your user profile record.');
         }
       }
