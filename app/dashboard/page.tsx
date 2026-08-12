@@ -6,8 +6,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '@/components/AuthProvider';
 import { updateProfile, getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
-import { db, isFirebaseConfigured } from '@/lib/firebase';
-import { collection, query, where, getDocs, addDoc, doc, setDoc, orderBy, limit } from 'firebase/firestore';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { generateRoomCode } from '@/lib/room';
 import Logo from '@/components/Logo';
 import { useTheme } from 'next-themes';
@@ -92,8 +91,8 @@ export default function DashboardPage() {
     }, 5000);
   }, []);
 
-  const firebaseConnected = React.useMemo(() => {
-    return isFirebaseConfigured();
+  const supabaseConnected = React.useMemo(() => {
+    return isSupabaseConfigured();
   }, []);
 
   // Resolved theme effects handled by next-themes natively
@@ -103,27 +102,27 @@ export default function DashboardPage() {
     setLoadingRooms(true);
     try {
       // 1. Fetch rooms owned by user
-      const ownedQ = query(collection(db, 'rooms'), where('host_id', '==', user.uid));
-      const ownedSnap = await getDocs(ownedQ);
-
+      const { data: ownedData } = await supabase.from('rooms').select('*').eq('host_id', user.id);
+      
       // 2. Fetch rooms joined by user
-      const joinedQ = query(collection(db, 'room_members'), where('user_id', '==', user.uid));
-      const joinedSnap = await getDocs(joinedQ);
+      const { data: joinedData } = await supabase.from('room_members').select('room_id').eq('user_id', user.id);
 
       const roomMap = new Map<string, any>();
 
-      ownedSnap.forEach((d) => {
-        roomMap.set(d.id, { id: d.id, ...d.data(), isOwner: true });
-      });
+      if (ownedData) {
+        ownedData.forEach((d: any) => {
+          roomMap.set(d.id, { ...d, isOwner: true });
+        });
+      }
 
-      for (const mDoc of joinedSnap.docs) {
-        const rId = mDoc.data().room_id;
-        if (rId && !roomMap.has(rId)) {
-          const rQ = query(collection(db, 'rooms'), where('__name__', '==', rId));
-          const rSnap = await getDocs(rQ);
-          if (!rSnap.empty) {
-            const rData = rSnap.docs[0].data();
-            roomMap.set(rId, { id: rId, ...rData, isOwner: rData.host_id === user.uid });
+      if (joinedData) {
+        for (const mDoc of joinedData) {
+          const rId = mDoc.room_id;
+          if (rId && !roomMap.has(rId)) {
+            const { data: rData } = await supabase.from('rooms').select('*').eq('id', rId).single();
+            if (rData) {
+              roomMap.set(rId, { ...rData, isOwner: rData.host_id === user.id });
+            }
           }
         }
       }
@@ -132,19 +131,16 @@ export default function DashboardPage() {
       const counts: { [key: string]: number } = {};
 
       for (const r of compiledRooms) {
-        const countQ = query(collection(db, 'room_members'), where('room_id', '==', r.id));
-        const countSnap = await getDocs(countQ);
-        counts[r.id] = countSnap.size || 1;
+        const { count } = await supabase.from('room_members').select('*', { count: 'exact', head: true }).eq('room_id', r.id);
+        counts[r.id] = count || 1;
       }
 
       setRoomsCount(counts);
       setRoomsJoined(compiledRooms);
 
       // 4. Fetch trending public rooms
-      const pubsQ = query(collection(db, 'rooms'), where('is_private', '==', false), orderBy('created_at', 'desc'), limit(6));
-      const pubsSnap = await getDocs(pubsQ);
-      const pubsList: any[] = [];
-      pubsSnap.forEach((d) => pubsList.push({ id: d.id, ...d.data() }));
+      const { data: pubsSnap } = await supabase.from('rooms').select('*').eq('is_private', false).order('created_at', { ascending: false }).limit(6);
+      const pubsList: any[] = pubsSnap || [];
       setPublicRooms(pubsList);
     } catch (err: any) {
       console.error('Error fetching dashboard rooms:', err.message);
@@ -161,7 +157,7 @@ export default function DashboardPage() {
     setCreateError(null);
 
     try {
-      const userProfile = await getOrCreateProfile(user.uid, user.email || '');
+      const userProfile = await getOrCreateProfile(user.id, user.email || '');
       if (!userProfile) {
         throw new Error('Your user profile could not be validated or created in the database.');
       }
@@ -173,23 +169,29 @@ export default function DashboardPage() {
         name: createName.trim(),
         slug: activeCode,
         description: createDesc.trim() || null,
-        host_id: user.uid,
+        host_id: user.id,
         is_private: createIsPrivate,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
-      const roomDocRef = await addDoc(collection(db, 'rooms'), roomData);
-      const roomId = roomDocRef.id;
+      const { data: roomDoc, error: roomError } = await supabase
+        .from('rooms')
+        .insert([roomData])
+        .select()
+        .single();
+        
+      if (roomError) throw roomError;
+      const roomId = roomDoc.id;
 
-      await addDoc(collection(db, 'room_members'), {
+      await supabase.from('room_members').insert([{
         room_id: roomId,
-        user_id: user.uid,
+        user_id: user.id,
         display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host',
         is_muted: false,
         is_banned: false,
         joined_at: new Date().toISOString(),
-      });
+      }]);
 
       const defaultState = {
         room_id: roomId,
@@ -202,7 +204,7 @@ export default function DashboardPage() {
         last_sync_at: new Date().toISOString()
       };
 
-      await setDoc(doc(db, 'playback_state', roomId), defaultState);
+      await supabase.from('playback_state').insert([defaultState]);
 
       writeLog('success', 'Lounge synced', `Interactive studio room "${createName}" parsed successfully under code ${activeCode}!`);
 
@@ -226,34 +228,39 @@ export default function DashboardPage() {
       showToast("🫠 Looks like this invite missed the vibe check.", "error");
       return;
     }
-    if (joining || !firebaseConnected) return;
+    if (joining || !supabaseConnected) return;
 
     setJoining(true);
     setJoinError(null);
 
     try {
-      const q = query(collection(db, "rooms"), where("slug", "==", targetCode));
-      const snap = await getDocs(q);
+      const { data: snap, error: snapError } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('slug', targetCode)
+        .single();
 
-      if (snap.empty) {
+      if (snapError || !snap) {
         showToast("👀 We couldn't find that lounge.\nDouble-check the code or ask your friend for a fresh invite.", "error");
         setJoining(false);
         return;
       }
 
-      const roomMatch = { id: snap.docs[0].id, ...snap.docs[0].data() } as any;
+      const roomMatch = snap as any;
 
       if (user) {
-        const memberQ = query(
-          collection(db, 'room_members'),
-          where('room_id', '==', roomMatch.id),
-          where('user_id', '==', user.uid)
-        );
-        const memberSnap = await getDocs(memberQ);
+        const { data: memberSnap } = await supabase
+          .from('room_members')
+          .select('is_banned')
+          .eq('room_id', roomMatch.id)
+          .eq('user_id', user.id);
+          
         let isBanned = false;
-        memberSnap.forEach((d) => {
-          if (d.data().is_banned) isBanned = true;
-        });
+        if (memberSnap) {
+          memberSnap.forEach((d: any) => {
+            if (d.is_banned) isBanned = true;
+          });
+        }
 
         if (isBanned) {
           showToast("You are banned from entering this room.", "error");
@@ -279,7 +286,7 @@ export default function DashboardPage() {
     setErrorNotice(null);
 
     try {
-      await updateProfile(user.uid, { display_name: displayName.trim() });
+      await updateProfile(user.id, { display_name: displayName.trim() });
       await refreshProfile();
       setSuccessNotice('Your SyncWave profile was updated successfully!');
       setTimeout(() => {
@@ -314,11 +321,11 @@ export default function DashboardPage() {
   }, [profile]);
 
   React.useEffect(() => {
-    if (user && firebaseConnected) {
+    if (user && supabaseConnected) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchRoomsDetails();
     }
-  }, [user, fetchRoomsDetails, firebaseConnected]);
+  }, [user, fetchRoomsDetails, supabaseConnected]);
 
   // Handle auto-focus of join input on interaction with "Join Room" button in empty state
   const focusJoinInput = () => {

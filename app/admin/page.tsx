@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { updateProfile, getOrCreateProfile } from '@/lib/profile';
 import { writeLog, getLogs, clearLogs, LogEntry } from '@/lib/logger';
-import { db, isFirebaseConfigured } from '@/lib/firebase';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { 
   LogOut, 
   Terminal, 
@@ -36,8 +35,8 @@ export default function AdminPage() {
   const [successNotice, setSuccessNotice] = React.useState<string | null>(null);
   const [errorNotice, setErrorNotice] = React.useState<string | null>(null);
 
-  const firebaseConnected = React.useMemo(() => {
-    return isFirebaseConfigured();
+  const supabaseConnected = React.useMemo(() => {
+    return isSupabaseConfigured();
   }, []);
 
   React.useEffect(() => {
@@ -54,13 +53,13 @@ export default function AdminPage() {
     if (!user) return;
     
     writeLog('warn', 'Profile recovery', 'Simulating immediate profile recovery trigger test...');
-    if (!firebaseConnected) return;
+    if (!supabaseConnected) return;
 
     try {
-      await deleteDoc(doc(db, 'profiles', user.uid));
+      await supabase.from('profiles').delete().eq('id', user.id);
       writeLog('info', 'Profile recovery', 'Database entry cleared temporarily for tester. Retrying recovery handshake...');
 
-      const recoveredProfile = await getOrCreateProfile(user.uid, user.email || '');
+      const recoveredProfile = await getOrCreateProfile(user.id, user.email || '');
       await refreshProfile();
       
       writeLog('success', 'Profile recovery', `Handshake verified successfully. Reconstituted profile username: "@${recoveredProfile.username}"`);
@@ -184,9 +183,9 @@ export default function AdminPage() {
 
             <div className="space-y-4">
               <div>
-                <span className="text-stone-500 text-[10px] block uppercase">FIREBASE DATABASE STATE</span>
+                <span className="text-stone-500 text-[10px] block uppercase">SUPABASE DATABASE STATE</span>
                 <span className="text-xs font-semibold text-stone-200">
-                  {firebaseConnected ? (
+                  {supabaseConnected ? (
                     <span className="text-emerald-400 font-bold">CONNECTED (HEALTHY)</span>
                   ) : (
                     <span className="text-rose-450 font-bold">DISCONNECTED / INACTIVE</span>
@@ -205,7 +204,7 @@ export default function AdminPage() {
               <div>
                 <span className="text-stone-500 text-[10px] block uppercase">USER UNIQUE IDENTIFIER</span>
                 <span className="text-[10.5px] text-purple-300 select-all block break-all font-bold">
-                  {user?.uid || 'UNAUTHENTICATED'}
+                  {user?.id || 'UNAUTHENTICATED'}
                 </span>
               </div>
             </div>
@@ -259,7 +258,7 @@ export default function AdminPage() {
               </div>
 
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">Firebase Auth Handshake</span>
+                <span className="text-stone-400">Supabase Auth Handshake</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.login_auth === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.login_auth ? 'PASSED' : 'READY'}</span>
               </div>
 
