@@ -129,7 +129,7 @@ export default function Home() {
     setCreateError(null);
 
     try {
-      const userProfile = await getOrCreateProfile(user.uid, user.email || '');
+      const userProfile = await getOrCreateProfile(user.id, user.email || '');
       if (!userProfile) {
         throw new Error('Unresolved profile configuration. Please make sure profile initialization exists.');
       }
@@ -544,15 +544,14 @@ export default function Home() {
                 <X className="w-5 h-5" />
               </button>
 
-              <div className="mx-auto w-12 h-12 bg-rose-50 border border-rose-100 rounded-2xl flex items-center justify-center text-rose-500">
+              <div className="mx-auto w-12 h-12 bg-amber-50 border border-amber-100 rounded-2xl flex items-center justify-center text-amber-600">
                 <ShieldAlert className="w-6 h-6" />
               </div>
 
               <div>
-                <h3 className="font-sans font-bold text-stone-900 text-lg leading-snug">Host Authorization</h3>
-                <p className="text-xs text-stone-500 mt-1.5 px-2 leading-relaxed">
-                  Creating a room requires an account. <br />
-                  <span className="font-medium text-stone-700">Create an account or sign in to host a SyncWave room.</span>
+                <h3 className="font-sans font-bold text-stone-900 text-lg leading-snug">Authentication Required</h3>
+                <p className="text-xs text-stone-600 mt-2 px-2 leading-relaxed font-medium">
+                  To create or host a room, you must sign in to your account or sign up.
                 </p>
               </div>
 
@@ -565,9 +564,9 @@ export default function Home() {
                 </button>
                 <button
                   onClick={() => handleProceedToAuth('signup')}
-                  className="w-full bg-white border border-stone-250 text-stone-700 hover:bg-stone-50 py-2.5 rounded-xl text-xs font-semibold uppercase tracking-wider transition cursor-pointer"
+                  className="w-full bg-white border border-stone-300 text-stone-800 hover:bg-stone-50 py-2.5 rounded-xl text-xs font-semibold uppercase tracking-wider transition cursor-pointer"
                 >
-                  Create Account
+                  Sign Up
                 </button>
                 <button
                   onClick={() => setShowAuthWarningModal(false)}

@@ -460,7 +460,7 @@ export default function RoomPage() {
     }
   };
 
-  const currentIsHost = room ? room.host_id === user?.uid : false;
+  const currentIsHost = room ? room.host_id === user?.id : false;
 
   const handleHostPlay = async () => {
     if (!room || !currentIsHost) return;
@@ -491,7 +491,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.play(room.id, curTime, user?.uid);
+    await PlaybackSyncService.play(room.id, curTime, user?.id);
   };
 
   const handleHostPause = async () => {
@@ -519,7 +519,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.pause(room.id, curTime, user?.uid);
+    await PlaybackSyncService.pause(room.id, curTime, user?.id);
   };
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -556,7 +556,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, curTime, user?.uid);
+    await PlaybackSyncService.seek(room.id, curTime, user?.id);
   };
 
   const handleTimeUpdate = () => {
@@ -715,10 +715,10 @@ export default function RoomPage() {
             // Player state tags: 1 = PLAYING, 2 = PAUSED, 0 = ENDED
             if (stateCode === 1) {
               const cur = ytPlayerRef.current?.getCurrentTime() || 0;
-              PlaybackSyncService.play(room?.id || '', cur, user?.uid);
+              PlaybackSyncService.play(room?.id || '', cur, user?.id);
             } else if (stateCode === 2) {
               const cur = ytPlayerRef.current?.getCurrentTime() || 0;
-              PlaybackSyncService.pause(room?.id || '', cur, user?.uid);
+              PlaybackSyncService.pause(room?.id || '', cur, user?.id);
             } else if (stateCode === 0) {
               handleMediaEnded();
             }
@@ -777,7 +777,7 @@ export default function RoomPage() {
 
           if (currentIsHost && room) {
             // Update time in the database occasionally (throttle rate)
-            PlaybackSyncService.updateTime(room.id, cur, duration || 180, user?.uid);
+            PlaybackSyncService.updateTime(room.id, cur, duration || 180, user?.id);
           }
         }
       }, 1000);
@@ -933,7 +933,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.updateRate(room.id, rate, user?.uid);
+    await PlaybackSyncService.updateRate(room.id, rate, user?.id);
     showToast(`Playback speed scaled to ${rate}x`, "success");
   };
 
@@ -955,7 +955,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, target, user?.uid);
+    await PlaybackSyncService.seek(room.id, target, user?.id);
     showToast("Skipped backward 10s", "info");
   };
 
@@ -977,7 +977,7 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, target, user?.uid);
+    await PlaybackSyncService.seek(room.id, target, user?.id);
     showToast("Skipped forward 10s", "info");
   };
 
@@ -1159,7 +1159,7 @@ export default function RoomPage() {
         nextItem.media_url,
         loadedType,
         nextItem.duration,
-        user?.uid
+        user?.id
       );
 
       // Force play on playback target
@@ -1213,7 +1213,7 @@ export default function RoomPage() {
         nextItem.media_url,
         loadedType,
         nextItem.duration,
-        user?.uid
+        user?.id
       );
 
       // Lazy start player
@@ -1229,7 +1229,7 @@ export default function RoomPage() {
     } else {
       writeLog('info', 'Sync Wave Engine', 'Playback ended and queue is empty, waiting in standby.');
       setIsPlaying(false);
-      await PlaybackSyncService.pause(room.id, currentTime, user?.uid);
+      await PlaybackSyncService.pause(room.id, currentTime, user?.id);
     }
   };
 
@@ -1252,7 +1252,7 @@ export default function RoomPage() {
     setCurrentTime(0);
     setIsPlaying(false);
     
-    await PlaybackSyncService.updateMedia(room.id, url, type, mediaDuration, user?.uid);
+    await PlaybackSyncService.updateMedia(room.id, url, type, mediaDuration, user?.id);
   };
 
   const formatTime = (seconds: number): string => {
@@ -1570,7 +1570,7 @@ export default function RoomPage() {
   console.log("ROOM PAGE DEBUG", {
     roomFound: !!room,
     roomData: room,
-    authUser: user ? { id: user.uid, email: user.email } : null,
+    authUser: user ? { id: user.id, email: user.email } : null,
     guestSession: getStoredGuestSession(),
     memberRecord: currentMember,
     loading,
@@ -1680,7 +1680,7 @@ export default function RoomPage() {
   }
 
   // Active user / host is resolved! Render pristine Collaborative Workspace
-  const isHost = room.host_id === user?.uid;
+  const isHost = room.host_id === user?.id;
   return (
     <div id="room-viewport" className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col font-sans select-none overflow-y-auto pb-16 transition-colors duration-200 relative">
       
@@ -1779,7 +1779,7 @@ export default function RoomPage() {
               </button>
 
               <a
-                href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.uid || ''}_${room?.slug || ''}`}
+                href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 rounded-xl text-xs text-sky-600 dark:text-sky-400 font-semibold transition cursor-pointer active:scale-95 whitespace-nowrap"
@@ -1825,7 +1825,7 @@ export default function RoomPage() {
               <svg className="w-3.5 h-3.5 text-sky-500 fill-current" viewBox="0 0 24 24">
                 <path d="M11.944 0C5.337 0 0 5.337 0 11.944c0 6.607 5.337 11.944 11.944 11.944 6.608 0 11.944-5.337 11.944-11.944C23.888 5.337 18.552 0 11.944 0zm5.556 8.3c-.172 1.812-.924 6.25-1.306 8.3-.162.868-.482 1.16-.792 1.188-.674.062-1.186-.445-1.838-.872-1.02-.668-1.597-1.082-2.587-1.734-1.144-.754-.402-1.168.25-1.844.17-.176 3.128-2.87 3.185-3.11.007-.031.014-.146-.055-.207-.068-.061-.169-.04-.242-.024-.104.024-1.764 1.12-5.0 3.31-.474.326-.88.487-1.218.479-.373-.008-1.089-.21-1.623-.383-.654-.213-1.174-.326-1.129-.688.023-.189.283-.382.78-.58 3.048-1.326 5.08-2.204 6.095-2.636 2.9-.1.233.1.65.114.925.1.018.232.042.483-.021.233-.062.518-.211.758-.415.24-.204.288-.475.253-.781-.035-.306-.217-.43-.45-.48z"/>
               </svg>
-              <span>Control this room using <a href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.uid || ''}_${room?.slug || ''}`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:underline font-bold transition">SyncWaveBot</a></span>
+              <span>Control this room using <a href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:underline font-bold transition">SyncWaveBot</a></span>
             </div>
           </div>
         </div>
@@ -2205,7 +2205,7 @@ export default function RoomPage() {
 
                       // Emit rapid time-seek update from volume changes if host to satisfy sync table constraints immediately
                       if (currentIsHost && room) {
-                        PlaybackSyncService.updateTime(room.id, currentTime, duration || 180, user?.uid).catch(() => {});
+                        PlaybackSyncService.updateTime(room.id, currentTime, duration || 180, user?.id).catch(() => {});
                       }
                     }}
                     className="w-14 accent-amber-500 h-1 bg-stone-850 rounded appearance-none cursor-pointer"
@@ -2886,7 +2886,7 @@ export default function RoomPage() {
                   <div className="grid grid-cols-2 gap-3.5 pt-1">
                     {/* Open Telegram */}
                     <a
-                      href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.uid || ''}_${room?.slug || ''}`}
+                      href={`https://t.me/syncwaveapp_bot?start=link_${profile?.id || user?.id || ''}_${room?.slug || ''}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold rounded-xl transition active:scale-95 cursor-pointer shadow-md shadow-sky-500/10 text-center"
