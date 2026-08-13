@@ -99,7 +99,7 @@ export default function SignupPage() {
       const user = data.user;
 
       if (user) {
-        writeLog('success', 'Signup success', `Registered user in Firebase auth: ${user.email}`);
+        writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
         setSuccessMsg('Initializing your SyncWave profile...');
 
         try {

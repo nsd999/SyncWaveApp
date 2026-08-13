@@ -1264,7 +1264,7 @@ export default function RoomPage() {
 
   // Setup room core connections and fetch metadata
   React.useEffect(() => {
-    if (!firebaseConnected || !roomCode) {
+    if (!supabaseConnected || !roomCode) {
       setLoading(false);
       return;
     }
@@ -1273,38 +1273,34 @@ export default function RoomPage() {
 
     const initRoom = async () => {
       try {
-        const { collection, query, where, getDocs } = await import('firebase/firestore');
-        const q = query(collection(db, 'rooms'), where('slug', '==', roomCode));
-        const snap = await getDocs(q);
+        const { data: snap, error } = await supabase.from('rooms').select('*').eq('slug', roomCode).single();
 
-        if (snap.empty) {
+        if (error || !snap) {
           setRoom(null);
           setLoading(false);
           return;
         }
 
-        const roomDoc = snap.docs[0];
-        const roomData = { id: roomDoc.id, ...roomDoc.data() } as Room;
+        const roomData = snap as Room;
         setRoom(roomData);
 
         if (user) {
-          await joinRoomAsRegisteredUser(roomData.id, user.uid, user.email || '');
+          await joinRoomAsRegisteredUser(roomData.id, user.id, user.email || '');
         } else {
           const stored = getStoredGuestSession();
           if (stored) {
-            const memberQ = query(
-              collection(db, 'room_members'),
-              where('room_id', '==', roomData.id),
-              where('guest_id', '==', stored.guestId)
-            );
-            const memberSnap = await getDocs(memberQ);
+            const { data: memberSnap } = await supabase
+              .from('room_members')
+              .select('*')
+              .eq('room_id', roomData.id)
+              .eq('guest_id', stored.guestId);
 
-            if (memberSnap.empty) {
+            if (!memberSnap || memberSnap.length === 0) {
               clearStoredGuestSession();
               setShowJoinPrompt(true);
               setLoading(false);
             } else {
-              const memberRow = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() } as RoomMember;
+              const memberRow = memberSnap[0] as RoomMember;
               if (memberRow.is_banned) {
                 setIsBanned(true);
                 setLoading(false);
@@ -1325,27 +1321,23 @@ export default function RoomPage() {
     };
 
     initRoom();
-  }, [roomCode, user, firebaseConnected, joinRoomAsRegisteredUser, getStoredGuestSession, clearStoredGuestSession]);
+  }, [roomCode, user, supabaseConnected, joinRoomAsRegisteredUser, getStoredGuestSession, clearStoredGuestSession]);
 
   // Load room data & playback state once room & currentMember are resolved
   React.useEffect(() => {
-    if (!firebaseConnected || !room || !currentMember) return;
+    if (!supabaseConnected || !room || !currentMember) return;
 
     setLoading(true);
 
     const loadRoomData = async () => {
       try {
-        const { collection, query, where, getDocs, orderBy, limit } = await import('firebase/firestore');
-
         // 1. Load full members list
-        const mQ = query(collection(db, 'room_members'), where('room_id', '==', room.id));
-        const mSnap = await getDocs(mQ);
-        const membersList: RoomMember[] = [];
-        mSnap.forEach((d) => membersList.push({ id: d.id, ...d.data() } as RoomMember));
+        const { data: mSnap } = await supabase.from('room_members').select('*').eq('room_id', room.id);
+        const membersList: RoomMember[] = (mSnap as RoomMember[]) || [];
         setMembers(membersList);
 
         // 2. Load playback state
-        const hostCheck = room.host_id === user?.uid;
+        const hostCheck = room.host_id === user?.id;
         const state = await PlaybackSyncService.initializePlaybackState(room.id, hostCheck);
         
         if (state) {
@@ -1373,21 +1365,21 @@ export default function RoomPage() {
         setQueue(items);
 
         // 4. Load messages
-        const msgQ = query(collection(db, 'messages'), where('room_id', '==', room.id), orderBy('created_at', 'asc'), limit(100));
-        const msgSnap = await getDocs(msgQ);
+        const { data: msgSnap } = await supabase.from('messages').select('*').eq('room_id', room.id).order('created_at', { ascending: true }).limit(100);
         const mappedMessages: ChatMessage[] = [];
-        msgSnap.forEach((d) => {
-          const m = d.data();
-          const senderMember = membersList.find((mem) => mem.user_id === m.sender_id || mem.guest_id === m.sender_id);
-          mappedMessages.push({
-            id: d.id,
-            room_id: m.room_id,
-            sender_id: m.sender_id,
-            sender_name: senderMember?.display_name || 'Anonymous',
-            content: m.content,
-            created_at: m.created_at
+        if (msgSnap) {
+          msgSnap.forEach((m: any) => {
+            const senderMember = membersList.find((mem) => mem.user_id === m.sender_id || mem.guest_id === m.sender_id);
+            mappedMessages.push({
+              id: m.id,
+              room_id: m.room_id,
+              sender_id: m.sender_id,
+              sender_name: senderMember?.display_name || 'Anonymous',
+              content: m.content,
+              created_at: m.created_at
+            });
           });
-        });
+        }
         setMessages(mappedMessages);
 
         setSyncStatusText('Real-time synchronization established.');
@@ -1400,21 +1392,17 @@ export default function RoomPage() {
     };
 
     loadRoomData();
-  }, [room, currentMember, firebaseConnected, user]);
+  }, [room, currentMember, supabaseConnected, user]);
 
-  // Firestore Realtime Subscriptions setup
+  // Supabase Realtime Subscriptions setup
   React.useEffect(() => {
-    if (!firebaseConnected || !room || !currentMember) return;
+    if (!supabaseConnected || !room || !currentMember) return;
 
-    let unsubMembers: () => void;
-    let unsubMessages: () => void;
-
-    import('firebase/firestore').then(({ collection, query, where, onSnapshot, orderBy, limit }) => {
-      // Room members listener
-      const mQ = query(collection(db, 'room_members'), where('room_id', '==', room.id));
-      unsubMembers = onSnapshot(mQ, (snap) => {
-        const membersList: RoomMember[] = [];
-        snap.forEach((d) => membersList.push({ id: d.id, ...d.data() } as RoomMember));
+    // Room members listener
+    const memberChannel = supabase.channel(`members:${room.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${room.id}` }, async (payload) => {
+        const { data: mSnap } = await supabase.from('room_members').select('*').eq('room_id', room.id);
+        const membersList: RoomMember[] = (mSnap as RoomMember[]) || [];
         setMembers(membersList);
 
         const currentInDB = membersList.find((m) => m.id === currentMember.id);
@@ -1426,32 +1414,32 @@ export default function RoomPage() {
           }
           setCurrentMember(currentInDB);
         }
-      });
+      })
+      .subscribe();
 
-      // Messages listener
-      const msgQ = query(collection(db, 'messages'), where('room_id', '==', room.id), orderBy('created_at', 'asc'), limit(100));
-      unsubMessages = onSnapshot(msgQ, (snap) => {
-        const msgs: ChatMessage[] = [];
-        snap.forEach((d) => {
-          const m = d.data();
-          msgs.push({
-            id: d.id,
+    // Messages listener
+    const messageChannel = supabase.channel(`messages:${room.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` }, (payload) => {
+        const m = payload.new as any;
+        setMessages((prev) => {
+          const senderName = m.sender_id === currentMember.user_id ? (currentMember.display_name || 'You') : 'Participant';
+          return [...prev, {
+            id: m.id || m.created_at,
             room_id: m.room_id,
             sender_id: m.sender_id,
-            sender_name: m.sender_id === currentMember.user_id ? (currentMember.display_name || 'You') : 'Participant',
+            sender_name: senderName,
             content: m.content,
             created_at: m.created_at
-          });
+          }];
         });
-        setMessages(msgs);
-      });
-    });
+      })
+      .subscribe();
 
     return () => {
-      if (unsubMembers) unsubMembers();
-      if (unsubMessages) unsubMessages();
+      supabase.removeChannel(memberChannel);
+      supabase.removeChannel(messageChannel);
     };
-  }, [room, currentMember, firebaseConnected]);
+  }, [room, currentMember, supabaseConnected]);
 
   const copyInviteLink = () => {
     if (typeof window === 'undefined') return;
@@ -1467,12 +1455,10 @@ export default function RoomPage() {
 
   const shareRoom = () => {
     setIsShareModalOpen(true);
-  };
-
-  if (!firebaseConnected) {
+  };  if (!supabaseConnected) {
     return (
-      <div className="min-h-screen bg-stone-950 flex items-center justify-center p-4 text-stone-100 font-sans">
-        <p className="text-sm text-stone-400">Firebase configuration missing or connecting...</p>
+      <div className={`min-h-screen flex items-center justify-center font-mono ${resolvedTheme === 'dark' ? 'bg-stone-950' : 'bg-stone-50'}`}>
+        <p className="text-sm text-stone-400">Database configuration missing or connecting...</p>
       </div>
     );
   }
