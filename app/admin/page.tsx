@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic';
 
 export default function AdminPage() {
   const router = useRouter();
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, refreshProfile, loading: authLoading } = useAuth();
   
   const [logs, setLogs] = React.useState<LogEntry[]>([]);
   const [testing, setTesting] = React.useState(false);
@@ -40,6 +40,12 @@ export default function AdminPage() {
   }, []);
 
   React.useEffect(() => {
+    if (!authLoading && !user) {
+      router.replace('/login?next=/admin');
+    }
+  }, [authLoading, user, router]);
+
+  React.useEffect(() => {
     const handleLogsSync = () => {
       setLogs(getLogs());
     };
@@ -49,31 +55,34 @@ export default function AdminPage() {
     return () => window.removeEventListener('syncwave-new-log', handleLogsSync);
   }, []);
 
-  const triggerDemoProfileRecoveryCheck = async () => {
-    if (!user) return;
-    
-    writeLog('warn', 'Profile recovery', 'Simulating immediate profile recovery trigger test...');
-    if (!supabaseConnected) return;
+  const runProfileHealthCheck = async () => {
+    if (!user || !supabaseConnected) return;
 
+    setErrorNotice(null);
     try {
-      await supabase.from('profiles').delete().eq('id', user.id);
-      writeLog('info', 'Profile recovery', 'Database entry cleared temporarily for tester. Retrying recovery handshake...');
-
       const recoveredProfile = await getOrCreateProfile(user.id, user.email || '');
       await refreshProfile();
-      
-      writeLog('success', 'Profile recovery', `Handshake verified successfully. Reconstituted profile username: "@${recoveredProfile.username}"`);
-      setSuccessNotice('Auto-recovery test completed! Row was deleted & recreated instantly.');
+      writeLog(
+        'success',
+        'Profile health',
+        `Profile lookup/recovery verified for "@${recoveredProfile.username}". No destructive test data was removed.`
+      );
+      setSuccessNotice('Profile health check passed.');
       setTimeout(() => setSuccessNotice(null), 4000);
     } catch (err: any) {
-      writeLog('error', 'Profile recovery', `Test loop failure: ${err.message}`);
-      setErrorNotice(err.message);
+      writeLog('error', 'Profile health', `Profile health check failed: ${err.message}`);
+      setErrorNotice(err.message || 'Profile health check failed.');
     }
   };
 
   const runSelfVerificationTests = async () => {
+    if (!supabaseConnected) {
+      setErrorNotice('Supabase is not configured.');
+      return;
+    }
+
     setTesting(true);
-    writeLog('info', 'Session refresh', 'Starting automated verification self-diagnostics checklist...');
+    setErrorNotice(null);
 
     const items = [
       'new_signup',
@@ -84,43 +93,71 @@ export default function AdminPage() {
       'runtime_verification'
     ];
 
-    for (const key of items) {
-      setTestResult(prev => ({ ...prev, [key]: null }));
-    }
+    setTestResult(
+      Object.fromEntries(items.map((key) => [key, null])) as { [key: string]: 'passed' | 'failed' | null }
+    );
 
-    const runStep = (key: string, ms: number) => {
-      return new Promise<void>((resolve) => {
-        setTimeout(() => {
-          setTestResult(prev => ({ ...prev, [key]: 'passed' }));
-          resolve();
-        }, ms);
-      });
+    const setPassed = (key: string, passed: boolean) => {
+      setTestResult((prev) => ({ ...prev, [key]: passed ? 'passed' : 'failed' }));
+      return passed;
     };
 
     try {
-      writeLog('info', 'Session refresh', 'Verify Test A: Checking signup schema state triggers...');
-      await runStep('new_signup', 600);
-      
-      writeLog('info', 'Session refresh', 'Verify Test B: Confirming validation filters token loops...');
-      await runStep('email_verification', 500);
+      const profileQuery = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', user?.id || '')
+        .maybeSingle();
+      setPassed('new_signup', !profileQuery.error && Boolean(profileQuery.data));
 
-      writeLog('info', 'Session refresh', 'Verify Test C: Authenticating connection buffers with database keys...');
-      await runStep('login_auth', 500);
+      setPassed(
+        'email_verification',
+        Boolean(user?.email_confirmed_at)
+      );
 
-      writeLog('info', 'Session refresh', 'Verify Test D: Syncing session storage token states...');
-      await runStep('session_persistence', 600);
+      setPassed('login_auth', Boolean(user));
 
-      writeLog('info', 'Session refresh', 'Verify Test E: Checking profile table checks and recovery triggers...');
-      await runStep('profile_auto_recovery', 700);
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      setPassed('session_persistence', !sessionError && sessionData.session?.user?.id === user?.id);
 
-      writeLog('info', 'Session refresh', 'Verify Test F: Inspecting TypeScript and Node layout checks...');
-      await runStep('runtime_verification', 400);
+      if (user) {
+        try {
+          await getOrCreateProfile(user.id, user.email || '');
+          setPassed('profile_auto_recovery', true);
+        } catch {
+          setPassed('profile_auto_recovery', false);
+        }
+      } else {
+        setPassed('profile_auto_recovery', false);
+      }
 
-      writeLog('success', 'Session restored', 'All verification metrics passed. SyncWave Phase 1 core modules are functional!');
-      setSuccessNotice('Diagnostics check complete! Verified real integrations.');
-      setTimeout(() => setSuccessNotice(null), 4000);
-    } catch (e: any) {
-      writeLog('error', 'Login failure', 'Sanity analysis identified edge warning in pipeline.');
+      const { error: runtimeError } = await supabase
+        .from('rooms')
+        .select('id', { count: 'exact', head: true });
+      setPassed('runtime_verification', !runtimeError);
+
+      const failed = Object.values({
+        new_signup: !profileQuery.error && Boolean(profileQuery.data),
+        email_verification: Boolean(user?.email_confirmed_at),
+        login_auth: Boolean(user),
+        session_persistence: !sessionError && sessionData.session?.user?.id === user?.id,
+        runtime_verification: !runtimeError
+      }).filter((passed) => !passed).length;
+
+      if (failed === 0) {
+        writeLog('success', 'Diagnostics', 'Live integration self-check completed successfully.');
+        setSuccessNotice('Live integration diagnostics completed.');
+      } else {
+        writeLog('warn', 'Diagnostics', `Live self-check completed with ${failed} warning(s).`);
+        setErrorNotice(`Diagnostics completed with ${failed} warning(s). Check the individual rows below.`);
+      }
+
+      setTimeout(() => {
+        setSuccessNotice(null);
+      }, 4500);
+    } catch (err: any) {
+      writeLog('error', 'Diagnostics', `Self-check failed: ${err.message}`);
+      setErrorNotice(err.message || 'Diagnostics failed.');
     } finally {
       setTesting(false);
     }
@@ -153,7 +190,7 @@ export default function AdminPage() {
         <div className="flex items-center space-x-4">
           <span className="text-[10px] text-stone-450 hidden md:inline-block">OPERATOR: {user?.email}</span>
           <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/15 border border-emerald-500/20 px-2 py-0.5 rounded-full uppercase">
-            FOUNDATION LIVE
+            AUTHENTICATED
           </span>
         </div>
       </nav>
@@ -192,7 +229,7 @@ export default function AdminPage() {
                   )}
                 </span>
                 <div className="mt-1 text-[10px] text-stone-450 leading-relaxed">
-                  Firestore rules: active. Trigger state hook monitors `profiles` collection dynamically.
+                  Live Supabase connection and profile state are checked against the current session.
                 </div>
               </div>
 
@@ -215,14 +252,14 @@ export default function AdminPage() {
                 <span className="h-2 w-2 bg-emerald-500 rounded-full animate-ping"></span>
               </div>
               <p className="text-[11px] text-stone-400 leading-normal">
-                Test the **Profile Auto-Recovery** system. This clears your user profile document and dynamically rebuilds it on the fly!
+                Run a non-destructive profile health check against the signed-in account.
               </p>
               <button
-                onClick={triggerDemoProfileRecoveryCheck}
+                onClick={runProfileHealthCheck}
                 className="w-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-[10px] font-bold tracking-wider uppercase py-2.5 rounded-lg border border-amber-500/20 cursor-pointer transition active:scale-98 flex items-center justify-center space-x-2"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-amber-500 animate-spin" style={{ animationDuration: '5s' }} />
-                <span>Trigger Profile Rebirth Simulation</span>
+                <span>Run Profile Health Check</span>
               </button>
             </div>
           </div>
@@ -248,39 +285,39 @@ export default function AdminPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px] border-b border-stone-800/50 pb-2">
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">Signup Schema Status</span>
+                <span className="text-stone-400">Profile Row</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.new_signup === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.new_signup ? 'PASSED' : 'READY'}</span>
               </div>
               
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">Inbound Validation Gateway</span>
+                <span className="text-stone-400">Email Verification</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.email_verification === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.email_verification ? 'PASSED' : 'READY'}</span>
               </div>
 
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">Supabase Auth Handshake</span>
+                <span className="text-stone-400">Auth Session</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.login_auth === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.login_auth ? 'PASSED' : 'READY'}</span>
               </div>
 
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">JWT Token Security Store</span>
+                <span className="text-stone-400">Session Persistence</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.session_persistence === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.session_persistence ? 'PASSED' : 'READY'}</span>
               </div>
 
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">Auto-Reconstitution Index</span>
+                <span className="text-stone-400">Profile Health</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.profile_auto_recovery === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.profile_auto_recovery ? 'PASSED' : 'READY'}</span>
               </div>
 
               <div className="bg-stone-950 px-3 py-2.5 rounded-lg border border-stone-850 flex items-center justify-between">
-                <span className="text-stone-400">V8 Sandbox Compiler Bounds</span>
+                <span className="text-stone-400">Database Roundtrip</span>
                 <span className={`text-[9px] px-1.5 py-0.5 font-bold rounded ${testResult.runtime_verification === 'passed' ? 'bg-emerald-500/10 text-emerald-405 border border-emerald-500/20' : 'bg-stone-850 text-stone-500'}`}>{testResult.runtime_verification ? 'PASSED' : 'READY'}</span>
               </div>
             </div>
             
             <div className="text-[10px] text-stone-500 flex justify-between">
               <span>Automatic Sanity System Controls</span>
-              <span>All suites completed instantly on sandbox triggers</span>
+              <span>Checks run against live Supabase state</span>
             </div>
           </div>
 
@@ -322,7 +359,7 @@ export default function AdminPage() {
             </div>
 
             <div className="text-[10px] text-stone-500 flex justify-between select-none font-sans">
-              <span>SyncWave Engine Diagnostics v1.0 • Phase 2 Verified</span>
+              <span>SyncWave Live Diagnostics</span>
               <span className="font-mono">Dynamic Logging: Active</span>
             </div>
           </div>
