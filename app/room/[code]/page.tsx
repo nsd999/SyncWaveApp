@@ -1661,7 +1661,7 @@ export default function RoomPage() {
             const senderName =
               senderMember?.profiles?.display_name ||
               senderMember?.display_name ||
-              (m.sender_id === currentMember.user_id ? currentMember.display_name : 'Participant');
+              (m.sender_id === currentMember.user_id ? (currentMember.display_name || 'You') : 'Participant');
 
             if (
               m.sender_id !== currentMember.user_id &&
