@@ -44,11 +44,9 @@ export default function SignupPage() {
     }
 
     try {
-      const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-      const redirectTo = `${window.location.origin}${pending ? '/' : '/dashboard'}`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo }
+        options: { redirectTo: getAuthRedirectUrl() }
       });
       if (error) throw error;
       setSuccessMsg('Redirecting to Google...');
@@ -98,7 +96,7 @@ export default function SignupPage() {
         password,
         options: {
           data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' },
-          emailRedirectTo: `${window.location.origin}/login`
+          emailRedirectTo: getAuthRedirectUrl()
         }
       });
       if (error) throw error;
@@ -165,7 +163,7 @@ export default function SignupPage() {
           <div id="signup-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <p className="font-semibold text-rose-900">Registration Denied</p>
+              <p className="font-semibold text-rose-900">Registration Problem</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
             </div>
           </div>
