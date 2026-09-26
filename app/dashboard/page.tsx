@@ -102,10 +102,18 @@ export default function DashboardPage() {
     setLoadingRooms(true);
     try {
       // 1. Fetch rooms owned by user
-      const { data: ownedData } = await supabase.from('rooms').select('*').eq('host_id', user.id);
-      
+      const { data: ownedData, error: ownedError } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('host_id', user.id);
+      if (ownedError) throw ownedError;
+
       // 2. Fetch rooms joined by user
-      const { data: joinedData } = await supabase.from('room_members').select('room_id').eq('user_id', user.id);
+      const { data: joinedData, error: joinedError } = await supabase
+        .from('room_members')
+        .select('room_id')
+        .eq('user_id', user.id);
+      if (joinedError) throw joinedError;
 
       const roomMap = new Map<string, any>();
 
@@ -119,7 +127,12 @@ export default function DashboardPage() {
         for (const mDoc of joinedData) {
           const rId = mDoc.room_id;
           if (rId && !roomMap.has(rId)) {
-            const { data: rData } = await supabase.from('rooms').select('*').eq('id', rId).single();
+            const { data: rData, error: roomFetchError } = await supabase
+              .from('rooms')
+              .select('*')
+              .eq('id', rId)
+              .single();
+            if (roomFetchError && roomFetchError.code !== 'PGRST116') throw roomFetchError;
             if (rData) {
               roomMap.set(rId, { ...rData, isOwner: rData.host_id === user.id });
             }
@@ -131,7 +144,11 @@ export default function DashboardPage() {
       const counts: { [key: string]: number } = {};
 
       for (const r of compiledRooms) {
-        const { count } = await supabase.from('room_members').select('*', { count: 'exact', head: true }).eq('room_id', r.id);
+        const { count, error: countError } = await supabase
+          .from('room_members')
+          .select('*', { count: 'exact', head: true })
+          .eq('room_id', r.id);
+        if (countError) throw countError;
         counts[r.id] = count || 1;
       }
 
@@ -139,7 +156,13 @@ export default function DashboardPage() {
       setRoomsJoined(compiledRooms);
 
       // 4. Fetch trending public rooms
-      const { data: pubsSnap } = await supabase.from('rooms').select('*').eq('is_private', false).order('created_at', { ascending: false }).limit(6);
+      const { data: pubsSnap, error: publicRoomsError } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('is_private', false)
+        .order('created_at', { ascending: false })
+        .limit(6);
+      if (publicRoomsError) throw publicRoomsError;
       const pubsList: any[] = pubsSnap || [];
       setPublicRooms(pubsList);
     } catch (err: any) {
@@ -184,7 +207,7 @@ export default function DashboardPage() {
       if (roomError) throw roomError;
       const roomId = roomDoc.id;
 
-      await supabase.from('room_members').insert([{
+      const { error: memberError } = await supabase.from('room_members').insert([{
         room_id: roomId,
         user_id: user.id,
         display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host',
@@ -192,6 +215,7 @@ export default function DashboardPage() {
         is_banned: false,
         joined_at: new Date().toISOString(),
       }]);
+      if (memberError) throw memberError;
 
       const defaultState = {
         room_id: roomId,
@@ -204,7 +228,8 @@ export default function DashboardPage() {
         last_sync_at: new Date().toISOString()
       };
 
-      await supabase.from('playback_state').insert([defaultState]);
+      const { error: playbackError } = await supabase.from('playback_state').insert([defaultState]);
+      if (playbackError) throw playbackError;
 
       writeLog('success', 'Lounge synced', `Interactive studio room "${createName}" parsed successfully under code ${activeCode}!`);
 

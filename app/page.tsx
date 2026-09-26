@@ -156,7 +156,7 @@ export default function Home() {
       if (roomError) throw roomError;
       const roomId = roomDoc.id;
 
-      await supabase.from('room_members').insert([{
+      const { error: memberError } = await supabase.from('room_members').insert([{
         room_id: roomId,
         user_id: user.id,
         display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host',
@@ -164,6 +164,10 @@ export default function Home() {
         is_banned: false,
         joined_at: new Date().toISOString(),
       }]);
+
+      if (memberError) {
+        throw new Error(`Room created, but host membership failed: ${memberError.message}`);
+      }
 
       const defaultState = {
         room_id: roomId,
@@ -176,7 +180,10 @@ export default function Home() {
         last_sync_at: new Date().toISOString()
       };
 
-      await supabase.from('playback_state').insert([defaultState]);
+      const { error: playbackError } = await supabase.from('playback_state').insert([defaultState]);
+      if (playbackError) {
+        throw new Error(`Room created, but playback state initialization failed: ${playbackError.message}`);
+      }
 
       writeLog('success', 'Lounge synced', `Successfully generated Sound Lounge "${createName}" [${activeCode}]`);
       setShowCreateModal(false);

@@ -90,6 +90,7 @@ export default function RoomPage() {
   const [members, setMembers] = React.useState<RoomMember[]>([]);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [typedMessage, setTypedMessage] = React.useState('');
+
   
   // Guest join states
   const [guestNameInput, setGuestNameInput] = React.useState('');
@@ -186,7 +187,7 @@ export default function RoomPage() {
     rawUrl: string;
   } | null>(null);
 
-  // Drag-and-drop file upload simulation
+  // Local file upload uses Supabase Storage when configured; no fake sample substitution.
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [uploadedFileName, setUploadedFileName] = React.useState<string | null>(null);
@@ -229,6 +230,15 @@ export default function RoomPage() {
   const playerRef = React.useRef<HTMLVideoElement | null>(null);
   const ytPlayerRef = React.useRef<any>(null);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
+  const pendingAutoplayRef = React.useRef(false);
+  const chatChannelRef = React.useRef<any>(null);
+  const membersRef = React.useRef<RoomMember[]>([]);
+  const typingTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const isChatAtBottomRef = React.useRef(true);
+
+  React.useEffect(() => {
+    membersRef.current = members;
+  }, [members]);
 
   const supabaseConnected = isSupabaseConfigured();
 
@@ -370,7 +380,7 @@ export default function RoomPage() {
       const row = docRef as RoomMember;
 
       setStoredGuestSession(guestId, safeName, sessionId);
-      setCurrentMember(row);
+      setCurrentMember({ ...row, session_id: sessionId });
       setShowJoinPrompt(false);
       writeLog('success', 'Lounge synced', `Guest "${safeName}" joined synced session.`);
       await fetchRoomDetails();
@@ -382,17 +392,31 @@ export default function RoomPage() {
   };
 
   const leaveRoom = React.useCallback(async () => {
-    if (!supabaseConnected || !currentMember || !room) return;
+    if (!currentMember || !room) return;
 
-    try {
-      await supabase.from('room_members').delete().eq('id', currentMember.id);
-      clearStoredGuestSession();
-      setCurrentMember(null);
-      router.replace(user ? '/dashboard' : '/');
-    } catch (err: any) {
-      console.error('Failed to leave room cleanly:', err.message);
-      router.replace(user ? '/dashboard' : '/');
+    // Registered users may remove their own membership. Guest membership rows
+    // intentionally remain server-side and are hidden once realtime presence ends.
+    if (user && supabaseConnected) {
+      const { error } = await supabase
+        .from('room_members')
+        .delete()
+        .eq('id', currentMember.id)
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('[SyncWave Leave] Failed to remove registered membership:', error);
+      }
     }
+
+    if (presenceChannelRef.current) {
+      try {
+        await presenceChannelRef.current.untrack();
+      } catch {}
+    }
+
+    clearStoredGuestSession();
+    setCurrentMember(null);
+    router.replace(user ? '/dashboard' : '/');
   }, [currentMember, room, router, user, supabaseConnected, clearStoredGuestSession]);
 
   // Send visual message
@@ -410,12 +434,15 @@ export default function RoomPage() {
 
     try {
       const senderId = currentMember.user_id || currentMember.guest_id || 'anonymous';
-      await supabase.from('messages').insert([{
+      const { error } = await supabase.from('messages').insert([{
         room_id: room.id,
         sender_id: senderId,
+        sender_session_id: currentMember.session_id || null,
         content: currentText,
         created_at: new Date().toISOString()
       }]);
+
+      if (error) throw error;
     } catch (err: any) {
       console.error('[Room Chat] Message delivery failed:', err.message);
     }
@@ -567,7 +594,17 @@ export default function RoomPage() {
 
   const handleLoadedMetadata = () => {
     if (!playerRef.current) return;
-    setDuration(playerRef.current.duration || 0);
+    const actualDuration = Number(playerRef.current.duration || 0);
+    setDuration(actualDuration);
+
+    if (currentIsHost && room && actualDuration > 0) {
+      void PlaybackSyncService.updateTime(
+        room.id,
+        Number(playerRef.current.currentTime || 0),
+        actualDuration,
+        user?.id
+      );
+    }
   };
 
   // HELPER FOR YOUTUBE ISO duration parser
@@ -589,35 +626,76 @@ export default function RoomPage() {
 
     setIsFetchingPreview(true);
     setUrlError(null);
+
+    const applyOEmbedFallback = async () => {
+      const oembedRes = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+      if (!oembedRes.ok) throw new Error('YouTube metadata is unavailable for this link.');
+      const oembed = await oembedRes.json();
+
+      setYtPreview({
+        videoId,
+        title: oembed.title || 'YouTube Video',
+        thumbnailUrl: oembed.thumbnail_url || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+        duration: 0,
+        channelName: oembed.author_name || 'YouTube Creator',
+        publishedDate: '',
+        embeddable: true,
+        rawUrl: url
+      });
+    };
+
     try {
-      const apiKey = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY || "AIzaSyDDlzue5y2v_uY6iqK05Pf948yUbmCqxsc";
-      const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${videoId}&key=${apiKey}`);
-      if (!res.ok) throw new Error("Failed to fetch YouTube metadata");
+      const apiKey = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY?.trim();
+
+      if (!apiKey) {
+        await applyOEmbedFallback();
+        return;
+      }
+
+      const res = await fetch(
+        `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${videoId}&key=${encodeURIComponent(apiKey)}`
+      );
+
+      if (!res.ok) {
+        await applyOEmbedFallback();
+        return;
+      }
+
       const data = await res.json();
       if (!data.items || data.items.length === 0) {
-        throw new Error("No YouTube video found with this URL or ID.");
+        await applyOEmbedFallback();
+        return;
       }
+
       const item = data.items[0];
       const snippet = item.snippet;
       const contentDetails = item.contentDetails;
       const status = item.status;
+      const parsedDuration = parseISO8601Duration(contentDetails?.duration || '');
 
-      const parsedDuration = parseISO8601Duration(contentDetails?.duration);
-      
       setYtPreview({
         videoId,
-        title: snippet.title || "Unknown YouTube Video",
-        thumbnailUrl: snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+        title: snippet.title || 'Unknown YouTube Video',
+        thumbnailUrl:
+          snippet.thumbnails?.high?.url ||
+          snippet.thumbnails?.medium?.url ||
+          snippet.thumbnails?.default?.url ||
+          `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
         duration: parsedDuration,
-        channelName: snippet.channelTitle || "Unknown Channel",
-        publishedDate: snippet.publishedAt ? new Date(snippet.publishedAt).toLocaleDateString() : "",
+        channelName: snippet.channelTitle || 'Unknown Channel',
+        publishedDate: snippet.publishedAt ? new Date(snippet.publishedAt).toLocaleDateString() : '',
         embeddable: status?.embeddable !== false,
         rawUrl: url
       });
     } catch (err: any) {
-      console.error(err);
-      setUrlError(err.message || "Failed to retrieve YouTube metadata.");
-      setYtPreview(null);
+      console.error('[SyncWave YouTube] Metadata lookup failed:', err);
+      try {
+        await applyOEmbedFallback();
+      } catch (fallbackError: any) {
+        console.error('[SyncWave YouTube] oEmbed fallback failed:', fallbackError);
+        setUrlError(fallbackError?.message || 'Failed to retrieve YouTube metadata.');
+        setYtPreview(null);
+      }
     } finally {
       setIsFetchingPreview(false);
     }
@@ -687,13 +765,27 @@ export default function RoomPage() {
         },
         events: {
           onReady: (event: any) => {
-            console.log("YouTube API player loaded and bound actively.");
-            if (isPlaying) {
+            const actualDuration = Number(event.target.getDuration?.() || 0);
+            if (actualDuration > 0) {
+              setDuration(actualDuration);
+              if (currentIsHost && room) {
+                void PlaybackSyncService.updateTime(
+                  room.id,
+                  Number(event.target.getCurrentTime?.() || 0),
+                  actualDuration,
+                  user?.id
+                );
+              }
+            }
+
+            if (isPlaying || pendingAutoplayRef.current) {
+              event.target.seekTo(Math.max(0, currentTime), true);
               event.target.playVideo();
+              pendingAutoplayRef.current = false;
             } else {
               event.target.pauseVideo();
+              event.target.seekTo(Math.max(0, currentTime), true);
             }
-            event.target.seekTo(currentTime, true);
           },
           onStateChange: (event: any) => {
             const stateCode = event.data;
@@ -912,7 +1004,53 @@ export default function RoomPage() {
         }, 150);
       }
     }
-  }, [mediaUrl]);
+  }, []);
+
+  // Apply the authoritative playback state after the real media element has mounted.
+  // The initial database handshake can complete before the <video> element exists.
+  React.useEffect(() => {
+    if (!playbackState || !mediaUrl) return;
+
+    const isYouTube = mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/');
+    if (isYouTube) return;
+
+    const player = playerRef.current;
+    if (!player) return;
+
+    const targetTime = Math.max(0, Number(playbackState.current_time) || 0);
+    const targetRate = Number(playbackState.playback_rate) || 1;
+
+    const applyState = () => {
+      isUpdatingFromRemote.current = true;
+      player.playbackRate = targetRate;
+
+      if (Number.isFinite(player.duration) && player.duration > 0) {
+        player.currentTime = Math.min(targetTime, player.duration);
+      } else {
+        player.currentTime = targetTime;
+      }
+
+      if (playbackState.is_playing) {
+        player.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+      } else {
+        player.pause();
+        setIsPlaying(false);
+      }
+
+      setCurrentTime(player.currentTime);
+      window.setTimeout(() => {
+        isUpdatingFromRemote.current = false;
+      }, 100);
+    };
+
+    if (player.readyState >= 1) {
+      applyState();
+      return;
+    }
+
+    player.addEventListener('loadedmetadata', applyState, { once: true });
+    return () => player.removeEventListener('loadedmetadata', applyState);
+  }, [playbackState, mediaUrl]);
 
   const handleHostSpeedChange = async (rate: number) => {
     if (!room || !currentIsHost) return;
@@ -984,7 +1122,7 @@ export default function RoomPage() {
   // QUEUE OPERATIONS
   const handleAddMediaToQueue = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!room || !queueUrlInput.trim()) return;
+    if (!room || !currentIsHost || !queueUrlInput.trim()) return;
 
     const url = queueUrlInput.trim();
     if (!validateMediaUrl(url)) {
@@ -1061,50 +1199,84 @@ export default function RoomPage() {
     setQueue(items);
   };
 
-  const handleFileImportMock = async (file: File) => {
-    if (!room) return;
-    const isAudio = file.type.startsWith('audio/') || file.name.endsWith('.mp3');
-    const isVideo = file.type.startsWith('video/') || file.name.endsWith('.mp4');
-    
+  const getLocalMediaDuration = (file: File): Promise<number> =>
+    new Promise((resolve) => {
+      const objectUrl = URL.createObjectURL(file);
+      const element = file.type.startsWith('audio/')
+        ? document.createElement('audio')
+        : document.createElement('video');
+
+      element.preload = 'metadata';
+      element.onloadedmetadata = () => {
+        const duration = Number.isFinite(element.duration) ? element.duration : 0;
+        URL.revokeObjectURL(objectUrl);
+        resolve(duration);
+      };
+      element.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(0);
+      };
+      element.src = objectUrl;
+    });
+
+  const handleFileImport = async (file: File) => {
+    if (!room || !currentIsHost) return;
+
+    const isAudio = file.type.startsWith('audio/') || /\.mp3$/i.test(file.name);
+    const isVideo = file.type.startsWith('video/') || /\.mp4$/i.test(file.name);
+    const maxBytes = 100 * 1024 * 1024;
+
     if (!isAudio && !isVideo) {
-      setUrlError("Format not supported. Please import high-fidelity audio (MP3) or video (MP4) packets.");
+      setUrlError('Format not supported. Please import an MP3/audio or MP4/video file.');
+      setTimeout(() => setUrlError(null), 5000);
+      return;
+    }
+
+    if (file.size > maxBytes) {
+      setUrlError('File is too large. SyncWave local uploads are limited to 100 MB.');
       setTimeout(() => setUrlError(null), 5000);
       return;
     }
 
     setUploadProgress(10);
-    const intervalsTimer = setInterval(() => {
-      setUploadProgress((p) => {
-        if (p === null) return null;
-        if (p >= 100) {
-          clearInterval(intervalsTimer);
-          return 100;
-        }
-        return p + 15;
-      });
-    }, 150);
 
-    setTimeout(async () => {
-      setUploadProgress(null);
-      setUploadedFileName(file.name);
-      
-      // Auto queue mock synced track
-      const sampleUrl = isAudio 
-        ? "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" 
-        : "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
-      
-      const title = file.name || (isAudio ? "Imported Local Audio" : "Imported Local Video");
-      const duration = isAudio ? 372 : 596;
-      const thumbnail = isAudio 
-        ? `https://picsum.photos/seed/${encodeURIComponent(title)}/120/90`
-        : `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.png`;
-      
-      const addedByName = currentMember?.profiles?.display_name || currentMember?.display_name || 'Host';
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+      const storagePath = `${room.id}/${crypto.randomUUID()}-${safeName}`;
+      const duration = await getLocalMediaDuration(file);
+
+      setUploadProgress(25);
+
+      const { error: uploadError } = await supabase.storage
+        .from('syncwave-media')
+        .upload(storagePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type || (isAudio ? 'audio/mpeg' : 'video/mp4')
+        });
+
+      if (uploadError) throw uploadError;
+
+      setUploadProgress(75);
+
+      const { data: publicUrlData } = supabase.storage
+        .from('syncwave-media')
+        .getPublicUrl(storagePath);
+
+      const publicUrl = publicUrlData.publicUrl;
+      const title = file.name.replace(/\.[^/.]+$/, '') || (isAudio ? 'Uploaded Audio' : 'Uploaded Video');
+      const thumbnail = isVideo
+        ? `https://picsum.photos/seed/${encodeURIComponent(title)}/320/180`
+        : `https://picsum.photos/seed/${encodeURIComponent(title)}/320/320`;
+      const addedByName =
+        currentMember?.profiles?.display_name ||
+        currentMember?.display_name ||
+        'Host';
       const addedByUserId = currentMember?.user_id || currentMember?.guest_id || null;
 
-      await PlaybackSyncService.addToQueue(
+      const added = await PlaybackSyncService.addToQueue(
         room.id,
-        sampleUrl,
+        publicUrl,
         isAudio ? 'audio' : 'video',
         title,
         duration,
@@ -1113,12 +1285,29 @@ export default function RoomPage() {
         addedByName
       );
 
-      // Refetch queue playlist
+      if (!added) {
+        // Avoid leaving an orphaned uploaded object when queue insertion fails.
+        await supabase.storage.from('syncwave-media').remove([storagePath]);
+        throw new Error('Media uploaded, but the queue entry could not be created.');
+      }
+
+      setUploadProgress(100);
+      setUploadedFileName(file.name);
+
       const items = await PlaybackSyncService.fetchQueue(room.id);
       setQueue(items);
 
-      setTimeout(() => setUploadedFileName(null), 3000);
-    }, 1600);
+      setTimeout(() => {
+        setUploadProgress(null);
+        setUploadedFileName(null);
+      }, 1800);
+    } catch (err: any) {
+      console.error('[SyncWave Upload] Upload failed:', err);
+      setUploadProgress(null);
+      setUploadedFileName(null);
+      setUrlError(err?.message || 'Upload failed. Please try again.');
+      setTimeout(() => setUrlError(null), 6000);
+    }
   };
 
   const handlePlayNextInQueue = async (item: any) => {
@@ -1161,6 +1350,7 @@ export default function RoomPage() {
         nextItem.duration,
         user?.id
       );
+      await PlaybackSyncService.play(room.id, 0, user?.id);
 
       // Force play on playback target
       setTimeout(() => {
@@ -1180,13 +1370,30 @@ export default function RoomPage() {
   // TYPING INDICATORS BROADCASTER
   const handleTypingKeydown = () => {
     if (!room || !currentMember || isTyping) return;
+
     setIsTyping(true);
-    if ((window as any).typingTimer) {
-      clearTimeout((window as any).typingTimer);
-    }
-    (window as any).typingTimer = setTimeout(() => {
+    void chatChannelRef.current?.send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: {
+        memberId: currentMember.id,
+        name: currentMember.profiles?.display_name || currentMember.display_name || 'Participant',
+        typing: true
+      }
+    });
+
+    window.setTimeout(() => {
+      void chatChannelRef.current?.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: {
+          memberId: currentMember.id,
+          name: currentMember.profiles?.display_name || currentMember.display_name || 'Participant',
+          typing: false
+        }
+      });
       setIsTyping(false);
-    }, 2000);
+    }, 1600);
   };
 
   async function handleMediaEnded() {
@@ -1215,6 +1422,7 @@ export default function RoomPage() {
         nextItem.duration,
         user?.id
       );
+      await PlaybackSyncService.play(room.id, 0, user?.id);
 
       // Lazy start player
       setTimeout(() => {
@@ -1241,7 +1449,8 @@ export default function RoomPage() {
       return;
     }
     
-    let mediaDuration = 596; 
+    let mediaDuration = 0;
+    if (url.includes('BigBuckBunny')) mediaDuration = 596;
     if (url.includes('Sintel')) mediaDuration = 653;
     if (url.includes('Helix-Song-1')) mediaDuration = 372;
     
@@ -1300,7 +1509,11 @@ export default function RoomPage() {
               setShowJoinPrompt(true);
               setLoading(false);
             } else {
-              const memberRow = memberSnap[0] as RoomMember;
+              const memberRow = {
+                ...(memberSnap[0] as RoomMember),
+                session_id: stored.sessionId
+              } as RoomMember;
+
               if (memberRow.is_banned) {
                 setIsBanned(true);
                 setLoading(false);
@@ -1398,48 +1611,205 @@ export default function RoomPage() {
   React.useEffect(() => {
     if (!supabaseConnected || !room || !currentMember) return;
 
-    // Room members listener
-    const memberChannel = supabase.channel(`members:${room.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${room.id}` }, async (payload) => {
-        const { data: mSnap } = await supabase.from('room_members').select('*').eq('room_id', room.id);
-        const membersList: RoomMember[] = (mSnap as RoomMember[]) || [];
-        setMembers(membersList);
+    const memberChannel = supabase
+      .channel(`members:${room.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${room.id}` },
+        async () => {
+          const { data: mSnap, error } = await supabase
+            .from('room_members')
+            .select('*')
+            .eq('room_id', room.id);
 
-        const currentInDB = membersList.find((m) => m.id === currentMember.id);
-        if (!currentInDB) {
-          setIsKicked(true);
-        } else {
-          if (currentInDB.is_banned) {
-            setIsBanned(true);
+          if (error) {
+            console.error('[SyncWave Members] Refresh failed:', error);
+            return;
           }
-          setCurrentMember(currentInDB);
+
+          const membersList: RoomMember[] = (mSnap as RoomMember[]) || [];
+          setMembers(membersList);
+
+          const currentInDB = membersList.find((m) => m.id === currentMember.id);
+          if (!currentInDB) {
+            setIsKicked(true);
+          } else {
+            if (currentInDB.is_banned) {
+              setIsBanned(true);
+            }
+            setCurrentMember(currentInDB);
+          }
+        }
+      )
+      .subscribe();
+
+    const messageChannel = supabase
+      .channel(`messages:${room.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` },
+        (payload) => {
+          const m = payload.new as any;
+          if (!m?.id) return;
+
+          setMessages((prev) => {
+            if (prev.some((existing) => existing.id === m.id)) return prev;
+
+            const senderMember = membersRef.current.find(
+              (member) => member.user_id === m.sender_id || member.guest_id === m.sender_id
+            );
+            const senderName =
+              senderMember?.profiles?.display_name ||
+              senderMember?.display_name ||
+              (m.sender_id === currentMember.user_id ? (currentMember.display_name || 'You') : 'Participant');
+
+            if (
+              m.sender_id !== currentMember.user_id &&
+              m.sender_id !== currentMember.guest_id &&
+              !isChatAtBottomRef.current
+            ) {
+              setUnreadCount((count) => count + 1);
+            }
+
+            if (isChatAtBottomRef.current) {
+              requestAnimationFrame(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
+            }
+
+            return [
+              ...prev,
+              {
+                id: m.id,
+                room_id: m.room_id,
+                sender_id: m.sender_id,
+                sender_name: senderName,
+                content: m.content,
+                created_at: m.created_at
+              }
+            ];
+          });
+        }
+      )
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        const memberId = payload?.memberId as string | undefined;
+        if (!memberId || memberId === currentMember.id) return;
+
+        const senderMember = membersRef.current.find((member) => member.id === memberId);
+        const senderName = senderMember?.display_name || payload?.name || 'Participant';
+
+        if (payload?.typing) {
+          setTypingUsers((prev) => (prev.includes(senderName) ? prev : [...prev, senderName]));
+
+          if (typingTimersRef.current[memberId]) {
+            clearTimeout(typingTimersRef.current[memberId]);
+          }
+
+          typingTimersRef.current[memberId] = setTimeout(() => {
+            setTypingUsers((prev) => prev.filter((name) => name !== senderName));
+            delete typingTimersRef.current[memberId];
+          }, 2500);
+        } else {
+          if (typingTimersRef.current[memberId]) {
+            clearTimeout(typingTimersRef.current[memberId]);
+            delete typingTimersRef.current[memberId];
+          }
+          setTypingUsers((prev) => prev.filter((name) => name !== senderName));
         }
       })
       .subscribe();
 
-    // Messages listener
-    const messageChannel = supabase.channel(`messages:${room.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${room.id}` }, (payload) => {
-        const m = payload.new as any;
-        setMessages((prev) => {
-          const senderName = m.sender_id === currentMember.user_id ? (currentMember.display_name || 'You') : 'Participant';
-          return [...prev, {
-            id: m.id || m.created_at,
-            room_id: m.room_id,
-            sender_id: m.sender_id,
-            sender_name: senderName,
-            content: m.content,
-            created_at: m.created_at
-          }];
-        });
-      })
+    chatChannelRef.current = messageChannel;
+
+    const queueChannel = supabase
+      .channel(`queue:${room.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'media_queue', filter: `room_id=eq.${room.id}` },
+        async () => {
+          const items = await PlaybackSyncService.fetchQueue(room.id);
+          setQueue(items);
+        }
+      )
       .subscribe();
 
+    const playbackCleanup = PlaybackSyncService.subscribeToPlayback(
+      room.id,
+      (nextState) => {
+        syncLocalPlayerWithNewState(nextState);
+      },
+      (status, error) => {
+        if (status === 'SUBSCRIBED') {
+          setSyncStatusText('Real-time playback synchronization established.');
+        } else if (error) {
+          console.error('[SyncWave Playback] Realtime subscription error:', error);
+          setSyncStatusText('Realtime playback channel degraded.');
+        }
+      }
+    );
+
+    const presenceChannel = supabase
+      .channel(`presence:${room.id}`, { config: { presence: { key: currentMember.id } } })
+      .on('presence', { event: 'sync' }, () => {
+        const presenceState = presenceChannel.presenceState();
+        const next: Record<string, { status: string; last_seen_at: string }> = {};
+
+        Object.values(presenceState).forEach((entries: any) => {
+          const list = Array.isArray(entries) ? entries : [entries];
+          list.forEach((entry: any) => {
+            if (!entry?.memberId) return;
+            next[entry.memberId] = {
+              status: entry.status || 'Online',
+              last_seen_at: entry.last_seen_at || new Date().toISOString()
+            };
+          });
+        });
+
+        setPresences(next);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await presenceChannel.track({
+            memberId: currentMember.id,
+            displayName: currentMember.profiles?.display_name || currentMember.display_name || 'Participant',
+            status: 'Online',
+            last_seen_at: new Date().toISOString()
+          });
+        }
+      });
+
+    presenceChannelRef.current = presenceChannel;
+
     return () => {
-      supabase.removeChannel(memberChannel);
-      supabase.removeChannel(messageChannel);
+      chatChannelRef.current = null;
+      Object.values(typingTimersRef.current).forEach((timer) => clearTimeout(timer));
+      typingTimersRef.current = {};
+
+      void supabase.removeChannel(memberChannel);
+      void supabase.removeChannel(messageChannel);
+      void supabase.removeChannel(queueChannel);
+      void supabase.removeChannel(presenceChannel);
+      playbackCleanup();
+      setPresences({});
     };
-  }, [room, currentMember, supabaseConnected]);
+  }, [room, currentMember, supabaseConnected, showToast, syncLocalPlayerWithNewState]);
+
+  React.useEffect(() => {
+    if (!presenceChannelRef.current || !currentMember) return;
+
+    const status =
+      mediaStatus === 'Playing' ? 'Listening' :
+      mediaStatus === 'Buffering' ? 'Buffering' :
+      mediaStatus === 'Ended' ? 'Idle' :
+      'Online';
+
+    void presenceChannelRef.current.track({
+      memberId: currentMember.id,
+      displayName: currentMember.profiles?.display_name || currentMember.display_name || 'Participant',
+      status,
+      last_seen_at: new Date().toISOString()
+    });
+  }, [mediaStatus, currentMember]);
+
+
 
   const copyInviteLink = () => {
     if (typeof window === 'undefined') return;
@@ -1567,16 +1937,6 @@ export default function RoomPage() {
   }
 
   // Room Not Found State Screen
-  console.log("ROOM PAGE DEBUG", {
-    roomFound: !!room,
-    roomData: room,
-    authUser: user ? { id: user.id, email: user.email } : null,
-    guestSession: getStoredGuestSession(),
-    memberRecord: currentMember,
-    loading,
-    error: initError,
-    roomCode
-  });
 
   if (!room) {
     return (
@@ -2382,7 +2742,7 @@ export default function RoomPage() {
                         e.stopPropagation();
                         setIsDragging(false);
                         const file = e.dataTransfer.files?.[0];
-                        if (file) handleFileImportMock(file);
+                        if (file) handleFileImport(file);
                       }}
                       onClick={(e) => {
                         e.preventDefault();
@@ -2403,7 +2763,7 @@ export default function RoomPage() {
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => {
                           const file = e.target.files?.[0];
-                          if (file) handleFileImportMock(file);
+                          if (file) handleFileImport(file);
                         }}
                       />
                       
@@ -2458,7 +2818,12 @@ export default function RoomPage() {
 
           <div className="flex flex-wrap gap-2 py-1 items-center">
             <AnimatePresence>
-              {members.map((member) => {
+              {members
+                .filter((member) => {
+                  const memberId = member.user_id || member.guest_id || '';
+                  return member.id === currentMember?.id || Boolean(presences[memberId]);
+                })
+                .map((member) => {
                 const memberIsHost = member.user_id === room.host_id;
                 const memberIsMe = member.id === currentMember?.id;
                 const nickname = member.profiles?.display_name || member.display_name || 'Lounge Guest';
@@ -2598,7 +2963,15 @@ export default function RoomPage() {
           )}
 
           {/* messages list - Discord-like look */}
-          <div id="messages-list" className="flex-1 overflow-y-auto p-2 space-y-2 bg-stone-50 dark:bg-stone-950/40 rounded-xl border border-stone-200 dark:border-stone-850/60 scrollbar-thin max-h-48 min-h-[110px]">
+          <div
+            id="messages-list"
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              isChatAtBottomRef.current =
+                element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+            }}
+            className="flex-1 overflow-y-auto p-2 space-y-2 bg-stone-50 dark:bg-stone-950/40 rounded-xl border border-stone-200 dark:border-stone-850/60 scrollbar-thin max-h-48 min-h-[110px]"
+          >
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center p-3">
                 <MessageSquare className="w-5 h-5 text-stone-300 dark:text-stone-700 mb-1 shrink-0" />

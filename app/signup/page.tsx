@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
+import { getAuthRedirectUrl } from '@/lib/auth-redirect';
 import { cleanBaseUsername } from '@/lib/username';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity, User } from 'lucide-react';
@@ -43,7 +44,10 @@ export default function SignupPage() {
     }
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: getAuthRedirectUrl() }
+      });
       if (error) throw error;
       setSuccessMsg('Redirecting to Google...');
     } catch (err: any) {
@@ -91,12 +95,20 @@ export default function SignupPage() {
         email: email.trim(),
         password,
         options: {
-          data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' }
+          data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' },
+          emailRedirectTo: getAuthRedirectUrl()
         }
       });
       if (error) throw error;
       
       const user = data.user;
+
+      if (user && !data.session) {
+        writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
+        setSuccessMsg('Account created. Check your email to confirm your address, then sign in to SyncWave.');
+        setSubmitting(false);
+        return;
+      }
 
       if (user) {
         writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
@@ -151,7 +163,7 @@ export default function SignupPage() {
           <div id="signup-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <p className="font-semibold text-rose-900">Registration Denied</p>
+              <p className="font-semibold text-rose-900">Registration Problem</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
             </div>
           </div>

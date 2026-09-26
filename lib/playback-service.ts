@@ -11,6 +11,10 @@ export class PlaybackSyncService {
         .eq('room_id', roomId)
         .single();
 
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+
       if (data) {
         return data as PlaybackState;
       }
@@ -46,80 +50,100 @@ export class PlaybackSyncService {
     }
   }
 
-  static async play(roomId: string, currentTime: number, updatedByUserId?: string): Promise<void> {
+  static async play(roomId: string, currentTime: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      await supabase.from('playback_state').update({
+      const { error } = await supabase.from('playback_state').update({
         is_playing: true,
         current_time: currentTime,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
       }).eq('room_id', roomId);
+      if (error) throw error;
       writeLog('success', 'Sync Wave Engine', `Host broadcasted PLAY event from timestamp: ${currentTime.toFixed(1)}s`);
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] play update error:', e.message);
+      writeLog('error', 'Sync Wave Engine', `PLAY update failed: ${e.message}`);
+      return false;
     }
   }
 
-  static async pause(roomId: string, currentTime: number, updatedByUserId?: string): Promise<void> {
+  static async pause(roomId: string, currentTime: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      await supabase.from('playback_state').update({
+      const { error } = await supabase.from('playback_state').update({
         is_playing: false,
         current_time: currentTime,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
       }).eq('room_id', roomId);
+      if (error) throw error;
       writeLog('success', 'Sync Wave Engine', `Host broadcasted PAUSE event at timestamp: ${currentTime.toFixed(1)}s`);
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] pause update error:', e.message);
+      writeLog('error', 'Sync Wave Engine', `PAUSE update failed: ${e.message}`);
+      return false;
     }
   }
 
-  static async seek(roomId: string, currentTime: number, updatedByUserId?: string): Promise<void> {
+  static async seek(roomId: string, currentTime: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      await supabase.from('playback_state').update({
+      const { error } = await supabase.from('playback_state').update({
         current_time: currentTime,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
       }).eq('room_id', roomId);
+      if (error) throw error;
       writeLog('success', 'Sync Wave Engine', `Host broadcasted SEEK event to: ${currentTime.toFixed(1)}s`);
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] seek update error:', e.message);
+      writeLog('error', 'Sync Wave Engine', `SEEK update failed: ${e.message}`);
+      return false;
     }
   }
 
-  static async updateTime(roomId: string, currentTime: number, duration: number, updatedByUserId?: string): Promise<void> {
+  static async updateTime(roomId: string, currentTime: number, duration: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      await supabase.from('playback_state').update({
+      const { error } = await supabase.from('playback_state').update({
         current_time: currentTime,
         duration: duration,
         last_sync_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        updated_by: updatedByUserId || null
       }).eq('room_id', roomId);
+      if (error) throw error;
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] updateTime error:', e.message);
+      return false;
     }
   }
 
-  static async updateRate(roomId: string, playbackRate: number, updatedByUserId?: string): Promise<void> {
+  static async updateRate(roomId: string, playbackRate: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      await supabase.from('playback_state').update({
+      const { error } = await supabase.from('playback_state').update({
         playback_rate: playbackRate,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
       }).eq('room_id', roomId);
+      if (error) throw error;
       writeLog('success', 'Sync Wave Engine', `Host broadcasted SPEED event: ${playbackRate}x`);
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] updateRate error:', e.message);
+      writeLog('error', 'Sync Wave Engine', `SPEED update failed: ${e.message}`);
+      return false;
     }
   }
 
-  static async updateMedia(roomId: string, mediaUrl: string, mediaType: 'video' | 'audio', duration: number, updatedByUserId?: string): Promise<void> {
+  static async updateMedia(roomId: string, mediaUrl: string, mediaType: 'video' | 'audio', duration: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      await supabase.from('playback_state').update({
+      const { error } = await supabase.from('playback_state').update({
         media_url: mediaUrl,
         media_type: mediaType,
         current_time: 0,
@@ -129,19 +153,39 @@ export class PlaybackSyncService {
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
       }).eq('room_id', roomId);
+      if (error) throw error;
       writeLog('success', 'Sync Wave Engine', `Host changed media file: ${mediaUrl}`);
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] updateMedia error:', e.message);
+      writeLog('error', 'Sync Wave Engine', `MEDIA update failed: ${e.message}`);
+      return false;
     }
   }
 
-  static subscribeToPlayback(roomId: string, onUpdate: (state: PlaybackState) => void) {
-    const channel = supabase.channel(`public:playback_state:room_id=eq.${roomId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'playback_state', filter: `room_id=eq.${roomId}` }, (payload) => {
-        onUpdate(payload.new as PlaybackState);
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+  static subscribeToPlayback(
+    roomId: string,
+    onUpdate: (state: PlaybackState) => void,
+    onStatus?: (status: string, error?: Error) => void
+  ) {
+    const channel = supabase
+      .channel(`playback-state:${roomId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'playback_state', filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          if (payload.new) {
+            onUpdate(payload.new as PlaybackState);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        onStatus?.(status, err instanceof Error ? err : undefined);
+      });
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
   }
 
   static async fetchQueue(roomId: string): Promise<MediaQueueItem[]> {
@@ -216,33 +260,43 @@ export class PlaybackSyncService {
     }
   }
 
-  static async removeFromQueue(id: string): Promise<void> {
+  static async removeFromQueue(id: string): Promise<boolean> {
     try {
       const { error } = await supabase.from('media_queue').delete().eq('id', id);
       if (error) throw error;
       writeLog('success', 'Media Queue', 'Removed item from queue');
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] Failed to remove from media queue:', e.message);
+      writeLog('error', 'Media Queue', `Failed to remove queue item: ${e.message}`);
+      return false;
     }
   }
 
-  static async reorderQueue(items: { id: string; position: number }[]): Promise<void> {
+  static async reorderQueue(items: { id: string; position: number }[]): Promise<boolean> {
     try {
       for (const item of items) {
-        await supabase.from('media_queue').update({ position: item.position }).eq('id', item.id);
+        const { error } = await supabase.from('media_queue').update({ position: item.position }).eq('id', item.id);
+        if (error) throw error;
       }
       writeLog('success', 'Media Queue', 'Playlist reordered successfully');
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] Failed to reorder media queue:', e.message);
+      writeLog('error', 'Media Queue', `Failed to reorder queue: ${e.message}`);
+      return false;
     }
   }
 
-  static async markAsPlayed(id: string): Promise<void> {
+  static async markAsPlayed(id: string): Promise<boolean> {
     try {
       const { error } = await supabase.from('media_queue').update({ is_played: true }).eq('id', id);
       if (error) throw error;
+      return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] Failed to set is_played state:', e.message);
+      writeLog('error', 'Media Queue', `Failed to mark queue item as played: ${e.message}`);
+      return false;
     }
   }
 }
