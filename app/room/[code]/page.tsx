@@ -1185,50 +1185,84 @@ export default function RoomPage() {
     setQueue(items);
   };
 
-  const handleFileImportMock = async (file: File) => {
-    if (!room) return;
-    const isAudio = file.type.startsWith('audio/') || file.name.endsWith('.mp3');
-    const isVideo = file.type.startsWith('video/') || file.name.endsWith('.mp4');
-    
+  const getLocalMediaDuration = (file: File): Promise<number> =>
+    new Promise((resolve) => {
+      const objectUrl = URL.createObjectURL(file);
+      const element = file.type.startsWith('audio/')
+        ? document.createElement('audio')
+        : document.createElement('video');
+
+      element.preload = 'metadata';
+      element.onloadedmetadata = () => {
+        const duration = Number.isFinite(element.duration) ? element.duration : 0;
+        URL.revokeObjectURL(objectUrl);
+        resolve(duration);
+      };
+      element.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(0);
+      };
+      element.src = objectUrl;
+    });
+
+  const handleFileImport = async (file: File) => {
+    if (!room || !currentIsHost) return;
+
+    const isAudio = file.type.startsWith('audio/') || /\.mp3$/i.test(file.name);
+    const isVideo = file.type.startsWith('video/') || /\.mp4$/i.test(file.name);
+    const maxBytes = 100 * 1024 * 1024;
+
     if (!isAudio && !isVideo) {
-      setUrlError("Format not supported. Please import high-fidelity audio (MP3) or video (MP4) packets.");
+      setUrlError('Format not supported. Please import an MP3/audio or MP4/video file.');
+      setTimeout(() => setUrlError(null), 5000);
+      return;
+    }
+
+    if (file.size > maxBytes) {
+      setUrlError('File is too large. SyncWave local uploads are limited to 100 MB.');
       setTimeout(() => setUrlError(null), 5000);
       return;
     }
 
     setUploadProgress(10);
-    const intervalsTimer = setInterval(() => {
-      setUploadProgress((p) => {
-        if (p === null) return null;
-        if (p >= 100) {
-          clearInterval(intervalsTimer);
-          return 100;
-        }
-        return p + 15;
-      });
-    }, 150);
 
-    setTimeout(async () => {
-      setUploadProgress(null);
-      setUploadedFileName(file.name);
-      
-      // Auto queue mock synced track
-      const sampleUrl = isAudio 
-        ? "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" 
-        : "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
-      
-      const title = file.name || (isAudio ? "Imported Local Audio" : "Imported Local Video");
-      const duration = isAudio ? 372 : 596;
-      const thumbnail = isAudio 
-        ? `https://picsum.photos/seed/${encodeURIComponent(title)}/120/90`
-        : `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.png`;
-      
-      const addedByName = currentMember?.profiles?.display_name || currentMember?.display_name || 'Host';
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+      const storagePath = `${room.id}/${crypto.randomUUID()}-${safeName}`;
+      const duration = await getLocalMediaDuration(file);
+
+      setUploadProgress(25);
+
+      const { error: uploadError } = await supabase.storage
+        .from('syncwave-media')
+        .upload(storagePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type || (isAudio ? 'audio/mpeg' : 'video/mp4')
+        });
+
+      if (uploadError) throw uploadError;
+
+      setUploadProgress(75);
+
+      const { data: publicUrlData } = supabase.storage
+        .from('syncwave-media')
+        .getPublicUrl(storagePath);
+
+      const publicUrl = publicUrlData.publicUrl;
+      const title = file.name.replace(/\.[^/.]+$/, '') || (isAudio ? 'Uploaded Audio' : 'Uploaded Video');
+      const thumbnail = isVideo
+        ? `https://picsum.photos/seed/${encodeURIComponent(title)}/320/180`
+        : `https://picsum.photos/seed/${encodeURIComponent(title)}/320/320`;
+      const addedByName =
+        currentMember?.profiles?.display_name ||
+        currentMember?.display_name ||
+        'Host';
       const addedByUserId = currentMember?.user_id || currentMember?.guest_id || null;
 
-      await PlaybackSyncService.addToQueue(
+      const added = await PlaybackSyncService.addToQueue(
         room.id,
-        sampleUrl,
+        publicUrl,
         isAudio ? 'audio' : 'video',
         title,
         duration,
@@ -1237,12 +1271,29 @@ export default function RoomPage() {
         addedByName
       );
 
-      // Refetch queue playlist
+      if (!added) {
+        // Avoid leaving an orphaned uploaded object when queue insertion fails.
+        await supabase.storage.from('syncwave-media').remove([storagePath]);
+        throw new Error('Media uploaded, but the queue entry could not be created.');
+      }
+
+      setUploadProgress(100);
+      setUploadedFileName(file.name);
+
       const items = await PlaybackSyncService.fetchQueue(room.id);
       setQueue(items);
 
-      setTimeout(() => setUploadedFileName(null), 3000);
-    }, 1600);
+      setTimeout(() => {
+        setUploadProgress(null);
+        setUploadedFileName(null);
+      }, 1800);
+    } catch (err: any) {
+      console.error('[SyncWave Upload] Upload failed:', err);
+      setUploadProgress(null);
+      setUploadedFileName(null);
+      setUrlError(err?.message || 'Upload failed. Please try again.');
+      setTimeout(() => setUrlError(null), 6000);
+    }
   };
 
   const handlePlayNextInQueue = async (item: any) => {
@@ -2670,7 +2721,7 @@ export default function RoomPage() {
                         e.stopPropagation();
                         setIsDragging(false);
                         const file = e.dataTransfer.files?.[0];
-                        if (file) handleFileImportMock(file);
+                        if (file) handleFileImport(file);
                       }}
                       onClick={(e) => {
                         e.preventDefault();
@@ -2691,7 +2742,7 @@ export default function RoomPage() {
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => {
                           const file = e.target.files?.[0];
-                          if (file) handleFileImportMock(file);
+                          if (file) handleFileImport(file);
                         }}
                       />
                       
