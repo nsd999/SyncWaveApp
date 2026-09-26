@@ -380,7 +380,7 @@ export default function RoomPage() {
       const row = docRef as RoomMember;
 
       setStoredGuestSession(guestId, safeName, sessionId);
-      setCurrentMember(row);
+      setCurrentMember({ ...row, session_id: sessionId });
       setShowJoinPrompt(false);
       writeLog('success', 'Lounge synced', `Guest "${safeName}" joined synced session.`);
       await fetchRoomDetails();
@@ -392,17 +392,31 @@ export default function RoomPage() {
   };
 
   const leaveRoom = React.useCallback(async () => {
-    if (!supabaseConnected || !currentMember || !room) return;
+    if (!currentMember || !room) return;
 
-    try {
-      await supabase.from('room_members').delete().eq('id', currentMember.id);
-      clearStoredGuestSession();
-      setCurrentMember(null);
-      router.replace(user ? '/dashboard' : '/');
-    } catch (err: any) {
-      console.error('Failed to leave room cleanly:', err.message);
-      router.replace(user ? '/dashboard' : '/');
+    // Registered users may remove their own membership. Guest membership rows
+    // intentionally remain server-side and are hidden once realtime presence ends.
+    if (user && supabaseConnected) {
+      const { error } = await supabase
+        .from('room_members')
+        .delete()
+        .eq('id', currentMember.id)
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('[SyncWave Leave] Failed to remove registered membership:', error);
+      }
     }
+
+    if (presenceChannelRef.current) {
+      try {
+        await presenceChannelRef.current.untrack();
+      } catch {}
+    }
+
+    clearStoredGuestSession();
+    setCurrentMember(null);
+    router.replace(user ? '/dashboard' : '/');
   }, [currentMember, room, router, user, supabaseConnected, clearStoredGuestSession]);
 
   // Send visual message
@@ -1495,7 +1509,11 @@ export default function RoomPage() {
               setShowJoinPrompt(true);
               setLoading(false);
             } else {
-              const memberRow = memberSnap[0] as RoomMember;
+              const memberRow = {
+                ...(memberSnap[0] as RoomMember),
+                session_id: stored.sessionId
+              } as RoomMember;
+
               if (memberRow.is_banned) {
                 setIsBanned(true);
                 setLoading(false);
@@ -2797,7 +2815,12 @@ export default function RoomPage() {
 
           <div className="flex flex-wrap gap-2 py-1 items-center">
             <AnimatePresence>
-              {members.map((member) => {
+              {members
+                .filter((member) => {
+                  const memberId = member.user_id || member.guest_id || '';
+                  return member.id === currentMember?.id || Boolean(presences[memberId]);
+                })
+                .map((member) => {
                 const memberIsHost = member.user_id === room.host_id;
                 const memberIsMe = member.id === currentMember?.id;
                 const nickname = member.profiles?.display_name || member.display_name || 'Lounge Guest';
