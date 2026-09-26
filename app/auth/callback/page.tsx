@@ -5,6 +5,14 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Loader2, ShieldAlert } from 'lucide-react';
 
+function decodeOAuthError(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, ' '));
+  } catch {
+    return value;
+  }
+}
+
 export default function AuthCallbackPage() {
   const router = useRouter();
   const [error, setError] = React.useState<string | null>(null);
@@ -14,28 +22,57 @@ export default function AuthCallbackPage() {
 
     const finishAuth = async () => {
       try {
-        const hash = typeof window !== 'undefined' ? window.location.hash : '';
-        const query = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get('code');
+        const oauthError =
+          url.searchParams.get('error_description') ||
+          url.searchParams.get('error');
 
-        const oauthError = query.get('error_description') || query.get('error');
         if (oauthError) {
-          throw new Error(decodeURIComponent(oauthError.replace(/\+/g, ' ')));
+          throw new Error(decodeOAuthError(oauthError));
         }
 
-        // The browser Supabase client handles the PKCE code exchange when the
-        // callback URL loads. Reading the session here waits for that exchange.
-        const { data, error: sessionError } = await supabase.auth.getSession();
+        // Supabase may have already restored the session automatically when the
+        // browser client detected the callback URL. Reuse that session first.
+        let { data, error: sessionError } = await supabase.auth.getSession();
         if (sessionError) throw sessionError;
+
+        // For PKCE callbacks, explicitly exchange the one-time OAuth code when
+        // automatic URL handling has not produced a session yet.
+        if (!data.session?.user && code) {
+          const exchange = await supabase.auth.exchangeCodeForSession(code);
+          if (exchange.error) throw exchange.error;
+          data = exchange.data;
+        }
+
+        // Email confirmation/passwordless flows can return tokens in the hash.
+        // If Supabase has not restored them automatically, restore the session
+        // from the access/refresh token pair.
+        if (!data.session?.user) {
+          const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+          const accessToken = hash.get('access_token');
+          const refreshToken = hash.get('refresh_token');
+
+          if (accessToken && refreshToken) {
+            const restored = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (restored.error) throw restored.error;
+            data = restored.data;
+          }
+        }
 
         if (!data.session?.user) {
           throw new Error(
-            hash.includes('access_token')
-              ? 'Google authentication completed, but the session could not be restored.'
+            code
+              ? 'Google authentication returned a code, but Supabase could not create a session.'
               : 'No active authentication session was returned.'
           );
         }
 
         if (!active) return;
+
         const pending = localStorage.getItem('syncwave-pending-create') === 'true';
         router.replace(pending ? '/' : '/dashboard');
       } catch (err: any) {
@@ -44,7 +81,8 @@ export default function AuthCallbackPage() {
       }
     };
 
-    finishAuth();
+    void finishAuth();
+
     return () => {
       active = false;
     };
