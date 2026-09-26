@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
+import { getAuthRedirectUrl } from '@/lib/auth-redirect';
 import { cleanBaseUsername } from '@/lib/username';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity, User } from 'lucide-react';
