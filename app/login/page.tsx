@@ -39,7 +39,12 @@ export default function LoginPage() {
     }
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
+      const redirectTo = `${window.location.origin}${pending ? '/' : '/dashboard'}`;
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo }
+      });
       if (error) throw error;
       
       setSuccessMsg('Redirecting to Google...');
