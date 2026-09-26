@@ -40,11 +40,9 @@ export default function LoginPage() {
     }
 
     try {
-      const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-      const redirectTo = `${window.location.origin}${pending ? '/' : '/dashboard'}`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo }
+        options: { redirectTo: getAuthRedirectUrl() }
       });
       if (error) throw error;
       
