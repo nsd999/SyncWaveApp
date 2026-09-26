@@ -153,10 +153,6 @@ export default function RoomPage() {
     }, 5000);
   }, []);
 
-  React.useEffect(() => {
-    membersRef.current = members;
-  }, [members]);
-
   const [syncStatusText, setSyncStatusText] = React.useState('Initializing synchronization...');
 
   // Media Queue & Chat Interactions States
@@ -239,6 +235,10 @@ export default function RoomPage() {
   const membersRef = React.useRef<RoomMember[]>([]);
   const typingTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const isChatAtBottomRef = React.useRef(true);
+
+  React.useEffect(() => {
+    membersRef.current = members;
+  }, [members]);
 
   const supabaseConnected = isSupabaseConfigured();
 
@@ -1752,12 +1752,15 @@ export default function RoomPage() {
         const presenceState = presenceChannel.presenceState();
         const next: Record<string, { status: string; last_seen_at: string }> = {};
 
-        Object.values(presenceState).flat().forEach((entry: any) => {
-          if (!entry?.memberId) return;
-          next[entry.memberId] = {
-            status: entry.status || 'Online',
-            last_seen_at: entry.last_seen_at || new Date().toISOString()
-          };
+        Object.values(presenceState).forEach((entries: any) => {
+          const list = Array.isArray(entries) ? entries : [entries];
+          list.forEach((entry: any) => {
+            if (!entry?.memberId) return;
+            next[entry.memberId] = {
+              status: entry.status || 'Online',
+              last_seen_at: entry.last_seen_at || new Date().toISOString()
+            };
+          });
         });
 
         setPresences(next);
