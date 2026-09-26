@@ -33,16 +33,27 @@ function formatTime(seconds: number): string {
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Check secure token signature if configured
+    // Telegram should always send the configured secret token. Failing closed
+    // prevents the webhook from becoming an unauthenticated command endpoint.
     const incomingSecret = req.headers.get('x-telegram-bot-api-secret-token');
     const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    if (expectedSecret && incomingSecret !== expectedSecret) {
-      console.warn('Webhook secret token mismatch. Rejected unauthorized call.');
+
+    if (!expectedSecret) {
+      console.error('[SyncWave Telegram] TELEGRAM_WEBHOOK_SECRET is not configured.');
+      return new NextResponse('Webhook not configured', { status: 503 });
+    }
+
+    if (incomingSecret !== expectedSecret) {
+      console.warn('[SyncWave Telegram] Webhook secret mismatch.');
       return new NextResponse('Unauthorized', { status: 401 });
     }
 
     const body = await req.json();
-    console.log('--- RECEIVED TELEGRAM BOT UPDATE ---', JSON.stringify(body, null, 2));
+    console.info('[SyncWave Telegram] Update received:', {
+      hasMessage: Boolean(body?.message),
+      hasCallbackQuery: Boolean(body?.callback_query),
+      updateId: body?.update_id ?? null
+    });
 
     // Handle standard messages
     if (body.message) {
