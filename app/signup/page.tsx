@@ -43,7 +43,12 @@ export default function SignupPage() {
     }
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
+      const redirectTo = `${window.location.origin}${pending ? '/' : '/dashboard'}`;
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo }
+      });
       if (error) throw error;
       setSuccessMsg('Redirecting to Google...');
     } catch (err: any) {
@@ -91,12 +96,20 @@ export default function SignupPage() {
         email: email.trim(),
         password,
         options: {
-          data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' }
+          data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' },
+          emailRedirectTo: `${window.location.origin}/login`
         }
       });
       if (error) throw error;
       
       const user = data.user;
+
+      if (user && !data.session) {
+        writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
+        setSuccessMsg('Account created. Check your email to confirm your address, then sign in to SyncWave.');
+        setSubmitting(false);
+        return;
+      }
 
       if (user) {
         writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
