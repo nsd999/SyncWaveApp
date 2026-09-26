@@ -4,11 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm run typecheck:debug && next build",
+    "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "clean": "next clean",
-    "typecheck:debug": "node scripts/typecheck-debug.cjs"
+    "clean": "next clean"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
