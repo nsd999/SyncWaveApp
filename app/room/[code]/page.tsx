@@ -1857,7 +1857,7 @@ export default function RoomPage() {
             <ShieldAlert className="w-8 h-8 font-bold" />
           </div>
           <div className="space-y-2">
-            <h2 className="text-xl font-extrabold tracking-tight">Handshake Failure</h2>
+            <h2 className="text-xl font-extrabold tracking-tight">Unable to load room</h2>
             <p className="text-xs font-mono text-stone-400 uppercase tracking-wider">Error: REGISTRY_REGISTRATION_FAILED</p>
           </div>
           <p className="text-sm text-stone-300 leading-relaxed bg-stone-950 p-3 rounded-xl border border-stone-850 font-mono text-left break-words max-h-40 overflow-y-auto">
@@ -1886,7 +1886,7 @@ export default function RoomPage() {
             <ShieldAlert className="w-8 h-8" />
           </div>
           <div className="space-y-2">
-            <h2 className="text-xl font-extrabold tracking-tight">Access Prohibited</h2>
+            <h2 className="text-xl font-extrabold tracking-tight">Access denied</h2>
             <p className="text-xs font-mono text-stone-400 uppercase tracking-wider">Error: SIGNATURE_BLOCKED</p>
           </div>
           <p className="text-sm text-stone-300 leading-relaxed">
@@ -1916,7 +1916,7 @@ export default function RoomPage() {
             <VolumeX className="w-8 h-8" />
           </div>
           <div className="space-y-2">
-            <h2 className="text-xl font-extrabold tracking-tight">Connection Severed</h2>
+            <h2 className="text-xl font-extrabold tracking-tight">Connection issue</h2>
             <p className="text-xs font-mono text-stone-400 uppercase tracking-wider">Status: SESSION_REMOVED</p>
           </div>
           <p className="text-sm text-stone-300 leading-relaxed">
@@ -1946,7 +1946,7 @@ export default function RoomPage() {
             <Compass className="w-8 h-8 animate-spin" style={{ animationDuration: '10s' }} />
           </div>
           <div className="space-y-2">
-            <h2 className="text-lg font-bold tracking-tight">Session Missing or Inactive</h2>
+            <h2 className="text-lg font-bold tracking-tight">Room not found</h2>
             <p className="text-xs font-mono text-amber-500">Lounge code: #{roomCode}</p>
           </div>
           <p className="text-sm text-stone-300 leading-relaxed">
@@ -2070,7 +2070,7 @@ export default function RoomPage() {
                   )}
                 </div>
                 <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed truncate max-w-sm sm:max-w-md">
-                  {room.description || 'Elevated Synchronized Listening Lounge'}
+                  {room.description || 'Shared media room'}
                 </p>
               </div>
             </div>
