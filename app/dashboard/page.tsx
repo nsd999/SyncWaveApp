@@ -388,7 +388,7 @@ export default function DashboardPage() {
           
           <div className="hidden md:flex items-center space-x-2 text-xs">
             <span className="h-2 w-2 rounded-full bg-cyan-400 animate-ping"></span>
-            <span className="font-semibold text-cyan-400 uppercase tracking-widest text-[10px]">Sync Active</span>
+            <span className="font-semibold text-cyan-400 uppercase tracking-widest text-[10px]">Shared media workspace</span>
           </div>
         </div>
 
@@ -497,7 +497,7 @@ export default function DashboardPage() {
             }`}
           >
             <LogOut className="w-3.5 h-3.5 text-rose-500/80" />
-            <span>EXITS</span>
+            <span>Sign out</span>
           </button>
         </div>
       </nav>
@@ -505,6 +505,18 @@ export default function DashboardPage() {
       {/* Main Social Board Panel */}
       <main id="main-panel-core" className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-8 py-8 flex flex-col space-y-8">
         
+        <section id="workspace-page-intro" className="p-5 md:p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-cyan-300">Account workspace</p>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-stone-900 dark:text-white mt-1">Your SyncWave workspace</h1>
+            <p className="text-sm leading-relaxed text-stone-600 dark:text-stone-300 mt-2 max-w-2xl">Create a room, enter an invite code, or return to a session you have already joined.</p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-stone-600 dark:text-stone-300 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-blue-600 dark:bg-cyan-400" aria-hidden="true"></span>
+            <span>Shared media rooms</span>
+          </div>
+        </section>
+
         {/* Banner Announcement */}
         {showNotification && (
           <motion.div 
@@ -595,7 +607,7 @@ export default function DashboardPage() {
 
               {/* Stats highlights */}
               <div 
-                className={`grid grid-cols-4 gap-1.5 text-center p-3 rounded-xl min-w-[280px] sm:min-w-[340px] border ${
+                className={`grid grid-cols-2 gap-2 text-center p-3 rounded-xl min-w-[180px] sm:min-w-[220px] border ${
                   resolvedTheme === 'dark' 
                     ? 'bg-stone-950/45 border-stone-850' 
                     : 'bg-stone-50 border-stone-200'
@@ -612,14 +624,6 @@ export default function DashboardPage() {
                     {roomsJoined.length}
                   </span>
                   <span className={`text-[9px] font-medium tracking-tight block ${resolvedTheme === 'dark' ? 'text-stone-400' : 'text-stone-500'}`}>Joined</span>
-                </div>
-                <div className={`border-l ${resolvedTheme === 'dark' ? 'border-stone-850' : 'border-stone-200'}`}>
-                  <span className="text-[15px] font-bold text-cyan-405 block">0</span>
-                  <span className={`text-[9px] font-medium tracking-tight block ${resolvedTheme === 'dark' ? 'text-stone-400' : 'text-stone-500'}`}>Online</span>
-                </div>
-                <div className={`border-l ${resolvedTheme === 'dark' ? 'border-stone-850' : 'border-stone-200'}`}>
-                  <span className="text-[15px] font-bold text-purple-400 block">42h</span>
-                  <span className={`text-[9px] font-medium tracking-tight block ${resolvedTheme === 'dark' ? 'text-stone-400' : 'text-stone-500'}`}>Synced</span>
                 </div>
               </div>
 
@@ -644,10 +648,10 @@ export default function DashboardPage() {
                     <Plus className="w-5 h-5 font-bold" />
                   </div>
                   <h3 className={`text-sm font-bold tracking-wide mt-3 ${resolvedTheme === 'dark' ? 'text-white' : 'text-stone-900'}`}>
-                    Start Syncing Audio
+                    Create a room
                   </h3>
                   <p className={`text-xs leading-normal mt-1 ${resolvedTheme === 'dark' ? 'text-stone-400' : 'text-stone-600'}`}>
-                    Assemble a private or public music room, stream live visual tracks, and listen in sync.
+                    Start a public or private room and share supported media with friends.
                   </p>
                 </div>
 
@@ -655,7 +659,7 @@ export default function DashboardPage() {
                   onClick={() => setShowCreateModal(true)}
                   className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 hover:from-cyan-350 hover:to-purple-450 text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider uppercase transition shadow-md shadow-cyan-500/5 cursor-pointer flex items-center justify-center space-x-1.5"
                 >
-                  <span>Create New Lounge</span>
+                  <span>Create room</span>
                 </button>
               </motion.div>
 
@@ -732,7 +736,7 @@ export default function DashboardPage() {
                 <div className="flex items-center space-x-2">
                   <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
                   <h3 className={`text-xs font-bold uppercase tracking-widest ${resolvedTheme === 'dark' ? 'text-white' : 'text-stone-905'}`}>
-                    Active Connected Lounges ({roomsJoined.length})
+                    Your rooms ({roomsJoined.length})
                   </h3>
                 </div>
                 
@@ -744,7 +748,7 @@ export default function DashboardPage() {
               {loadingRooms ? (
                 <div className="py-12 text-center flex flex-col items-center justify-center space-y-3 font-mono text-xs text-stone-400">
                   <Loader2 className="w-7 h-7 text-cyan-400 animate-spin" />
-                  <span>Calibrating space frequencies...</span>
+                  <span>Loading your rooms...</span>
                 </div>
               ) : roomsJoined.length === 0 ? (
                 /* DELIGHTFUL EMPTY STATE FOR MY ROOMS */
@@ -837,7 +841,7 @@ export default function DashboardPage() {
                           <span className="text-stone-300 flex items-center gap-1.5 min-w-0">
                             <Music className="w-3.5 h-3.5 text-purple-400 shrink-0 animate-spin" style={{ animationDuration: '6s' }} />
                             <span className={`truncate max-w-[140px] font-medium leading-none ${resolvedTheme === 'dark' ? 'text-stone-300' : 'text-stone-700'}`}>
-                              Realtime Sync Active
+                              Realtime Shared media workspace
                             </span>
                           </span>
                           
