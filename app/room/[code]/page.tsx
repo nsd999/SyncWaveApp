@@ -63,6 +63,18 @@ interface ChatMessage {
   created_at: string;
 }
 
+const SAFE_ROOM_MEMBER_COLUMNS = 'id,room_id,user_id,guest_id,display_name,role,joined_at,is_host,is_muted,is_banned';
+const SAFE_ROOM_MESSAGE_COLUMNS = 'id,room_id,sender_id,content,created_at';
+
+const isAudioMediaUrl = (value: string): boolean => {
+  try {
+    const pathname = new URL(value).pathname.toLowerCase();
+    return /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|weba|aiff?)$/.test(pathname);
+  } catch {
+    return /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|weba|aiff?)(?:[?#]|$)/i.test(value);
+  }
+};
+
 const MEDIA_PRESETS = [
   { name: 'Big Buck Bunny (Video)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', type: 'video' },
   { name: 'Sintel Dream (Video)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4', type: 'video' },
@@ -115,6 +127,7 @@ export default function RoomPage() {
 
   // Playback sync states
   const [playbackState, setPlaybackState] = React.useState<PlaybackState | null>(null);
+  const [needsPlaybackGesture, setNeedsPlaybackGesture] = React.useState(false);
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
   const [isPlaying, setIsPlaying] = React.useState(false);
@@ -229,6 +242,8 @@ export default function RoomPage() {
   
   const playerRef = React.useRef<HTMLVideoElement | null>(null);
   const ytPlayerRef = React.useRef<any>(null);
+  const playbackStateRef = React.useRef<PlaybackState | null>(null);
+  const handleMediaEndedRef = React.useRef<(() => Promise<void>) | null>(null);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
   const pendingAutoplayRef = React.useRef(false);
   const chatChannelRef = React.useRef<any>(null);
@@ -297,7 +312,7 @@ export default function RoomPage() {
 
       const { data: existingMembers, error } = await supabase
         .from('room_members')
-        .select('*')
+        .select(SAFE_ROOM_MEMBER_COLUMNS)
         .eq('room_id', roomId)
         .eq('user_id', userId);
 
@@ -318,7 +333,7 @@ export default function RoomPage() {
           is_banned: false,
           joined_at: new Date().toISOString()
         };
-        const { data: docRef, error: insertError } = await supabase.from('room_members').insert([newMember]).select().single();
+        const { data: docRef, error: insertError } = await supabase.from('room_members').insert([newMember]).select(SAFE_ROOM_MEMBER_COLUMNS).single();
         if (insertError) throw insertError;
         
         setCurrentMember(docRef as RoomMember);
@@ -375,7 +390,7 @@ export default function RoomPage() {
         joined_at: new Date().toISOString()
       };
 
-      const { data: docRef, error: insertError } = await supabase.from('room_members').insert([newGuest]).select().single();
+      const { data: docRef, error: insertError } = await supabase.from('room_members').insert([newGuest]).select(SAFE_ROOM_MEMBER_COLUMNS).single();
       if (insertError) throw insertError;
       const row = docRef as RoomMember;
 
@@ -778,20 +793,43 @@ export default function RoomPage() {
               }
             }
 
-            if (isPlaying || pendingAutoplayRef.current) {
-              event.target.seekTo(Math.max(0, currentTime), true);
-              event.target.playVideo();
-              pendingAutoplayRef.current = false;
-            } else {
-              event.target.pauseVideo();
-              event.target.seekTo(Math.max(0, currentTime), true);
+            const latestState = playbackStateRef.current;
+            const stateMatchesPlayer = Boolean(
+              latestState?.media_url && getYouTubeId(latestState.media_url) === videoId
+            );
+            const startTime = stateMatchesPlayer
+              ? Math.max(0, Number(latestState?.current_time) || 0)
+              : Math.max(0, currentTime);
+            const shouldPlay = stateMatchesPlayer
+              ? Boolean(latestState?.is_playing)
+              : (isPlaying || pendingAutoplayRef.current);
+            const targetRate = stateMatchesPlayer
+              ? (Number(latestState?.playback_rate) || 1)
+              : playbackRate;
+
+            try {
+              event.target.setPlaybackRate?.(targetRate);
+              event.target.seekTo(startTime, true);
+              if (shouldPlay) event.target.playVideo();
+              else event.target.pauseVideo();
+            } catch (error) {
+              console.warn('[SyncWave YouTube] Failed to apply shared playback state:', error);
             }
+            setCurrentTime(startTime);
+            setPlaybackRate(targetRate);
+            setIsPlaying(Boolean(shouldPlay));
+            pendingAutoplayRef.current = false;
+          },
+          onAutoplayBlocked: () => {
+            setNeedsPlaybackGesture(true);
+            setSyncStatusText('Tap Enable Playback to allow your browser to start the shared video.');
           },
           onStateChange: (event: any) => {
             const stateCode = event.data;
             if (stateCode === 1) {
               setMediaStatus('Playing');
               setIsPlaying(true);
+              setNeedsPlaybackGesture(false);
             } else if (stateCode === 2) {
               setMediaStatus('Paused');
               setIsPlaying(false);
@@ -812,7 +850,7 @@ export default function RoomPage() {
               const cur = ytPlayerRef.current?.getCurrentTime() || 0;
               PlaybackSyncService.pause(room?.id || '', cur, user?.id);
             } else if (stateCode === 0) {
-              handleMediaEnded();
+              void handleMediaEndedRef.current?.();
             }
           },
           onError: (event: any) => {
@@ -880,12 +918,24 @@ export default function RoomPage() {
     };
   }, [isPlaying, mediaUrl, currentIsHost, room, user, duration]);
 
-  // HELPER FOR YOUTUBE ID DETECTION
-  const getYouTubeId = (url: string) => {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : null;
-  };
+  // Parse by hostname and path so watch, short, embed, live and Shorts links work.
+  function getYouTubeId(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+      if (host === 'youtu.be') {
+        const id = parsed.pathname.split('/').filter(Boolean)[0];
+        return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+      }
+      if (host !== 'youtube.com' && !host.endsWith('.youtube.com')) return null;
+      const queryId = parsed.searchParams.get('v');
+      if (queryId && /^[A-Za-z0-9_-]{11}$/.test(queryId)) return queryId;
+      const match = parsed.pathname.match(/^\/(?:embed|shorts|live|v)\/([A-Za-z0-9_-]{11})(?:\/|$)/);
+      return match?.[1] || null;
+    } catch {
+      return null;
+    }
+  }
 
   const validateMediaUrl = (url: string): boolean => {
     if (!url) return false;
@@ -899,6 +949,7 @@ export default function RoomPage() {
 
   const syncLocalPlayerWithNewState = React.useCallback((newState: PlaybackState) => {
     if (!newState) return;
+    playbackStateRef.current = newState;
     setPlaybackState(newState);
 
     const isYouTube = newState.media_url && (newState.media_url.includes('youtube.com') || newState.media_url.includes('youtu.be') || newState.media_url.includes('/embed/'));
@@ -924,8 +975,21 @@ export default function RoomPage() {
     setPlaybackRate(targetRate);
 
     if (isYouTube) {
-      // Sync YouTube IFrame Player
+      // A newly selected URL can arrive before its iframe has mounted. Cache that
+      // state rather than attempting to drive the previous iframe instance.
       const yt = ytPlayerRef.current;
+      const targetVideoId = newState.media_url ? getYouTubeId(newState.media_url) : null;
+      let mountedVideoId: string | null = null;
+      try {
+        mountedVideoId = yt?.getVideoData?.()?.video_id || null;
+      } catch {}
+      if (!yt || typeof yt.getPlayerState !== 'function' ||
+          (targetVideoId && mountedVideoId && targetVideoId !== mountedVideoId)) {
+        setCurrentTime(Math.max(0, Number(newState.current_time) || 0));
+        setIsPlaying(Boolean(newState.is_playing));
+        setSyncStatusText('Playback state received; waiting for media player.');
+        return;
+      }
       if (yt && typeof yt.getPlayerState === 'function') {
         isUpdatingFromRemote.current = true;
 
@@ -984,7 +1048,11 @@ export default function RoomPage() {
         // Sync play/pause state
         const isCurrentlyPlaying = !player.paused;
         if (newState.is_playing && !isCurrentlyPlaying) {
-          player.play().catch(e => console.log('Autoplay deferred:', e));
+          player.play().catch((e: any) => {
+            setIsPlaying(false);
+            if (e?.name === 'NotAllowedError') setNeedsPlaybackGesture(true);
+            else console.warn('[SyncWave Playback] Remote play was rejected:', e);
+          });
           setIsPlaying(true);
         } else if (!newState.is_playing && isCurrentlyPlaying) {
           player.pause();
@@ -1031,7 +1099,13 @@ export default function RoomPage() {
       }
 
       if (playbackState.is_playing) {
-        player.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+        player.play().then(() => {
+          setIsPlaying(true);
+          setNeedsPlaybackGesture(false);
+        }).catch((error: any) => {
+          setIsPlaying(false);
+          if (error?.name === 'NotAllowedError') setNeedsPlaybackGesture(true);
+        });
       } else {
         player.pause();
         setIsPlaying(false);
@@ -1133,7 +1207,7 @@ export default function RoomPage() {
 
     let finalTitle = queueTitleInput.trim();
     const isYt = url.includes('youtube.com') || url.includes('youtu.be') || url.includes('/embed/');
-    const isAudio = url.endsWith('.mp3') || url.includes('Helix') || url.includes('audio');
+    const isAudio = isAudioMediaUrl(url);
     const computedType = isYt ? 'youtube' : (isAudio ? 'audio' : 'video');
 
     let computedDuration = 180; // Default fallback (3 mins)
@@ -1441,6 +1515,51 @@ export default function RoomPage() {
     }
   };
 
+  React.useEffect(() => {
+    handleMediaEndedRef.current = handleMediaEnded;
+  });
+
+  const handleEnablePlayback = async () => {
+    try {
+      const isYouTube = mediaUrl && (
+        mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/')
+      );
+      if (isYouTube) {
+        const player = ytPlayerRef.current;
+        if (!player) {
+          showToast('The video player is still loading. Try again in a moment.', 'info');
+          return;
+        }
+        if (!isMuted) {
+          player.unMute?.();
+          player.setVolume?.(Math.round(videoVolume * 100));
+        }
+        if (playbackStateRef.current?.is_playing || isPlaying) {
+          player.playVideo?.();
+        } else {
+          player.pauseVideo?.();
+        }
+      } else {
+        const player = playerRef.current;
+        if (!player) {
+          showToast('The media player is still loading. Try again in a moment.', 'info');
+          return;
+        }
+        player.muted = isMuted;
+        player.volume = videoVolume;
+        if (playbackStateRef.current?.is_playing || isPlaying) {
+          await player.play();
+        } else {
+          player.pause();
+        }
+      }
+      setNeedsPlaybackGesture(false);
+    } catch (error: any) {
+      setNeedsPlaybackGesture(true);
+      showToast(error?.message || 'Your browser blocked playback. Tap Enable Playback again.', 'warning');
+    }
+  };
+
   const handleLoadMedia = async (url: string, type: 'video' | 'audio') => {
     if (!room || !currentIsHost) return;
     if (url && !validateMediaUrl(url)) {
@@ -1500,7 +1619,7 @@ export default function RoomPage() {
           if (stored) {
             const { data: memberSnap } = await supabase
               .from('room_members')
-              .select('*')
+              .select(SAFE_ROOM_MEMBER_COLUMNS)
               .eq('room_id', roomData.id)
               .eq('guest_id', stored.guestId);
 
@@ -1545,7 +1664,7 @@ export default function RoomPage() {
     const loadRoomData = async () => {
       try {
         // 1. Load full members list
-        const { data: mSnap } = await supabase.from('room_members').select('*').eq('room_id', room.id);
+        const { data: mSnap } = await supabase.from('room_members').select(SAFE_ROOM_MEMBER_COLUMNS).eq('room_id', room.id);
         const membersList: RoomMember[] = (mSnap as RoomMember[]) || [];
         setMembers(membersList);
 
@@ -1578,7 +1697,7 @@ export default function RoomPage() {
         setQueue(items);
 
         // 4. Load messages
-        const { data: msgSnap } = await supabase.from('messages').select('*').eq('room_id', room.id).order('created_at', { ascending: true }).limit(100);
+        const { data: msgSnap } = await supabase.from('messages').select(SAFE_ROOM_MESSAGE_COLUMNS).eq('room_id', room.id).order('created_at', { ascending: true }).limit(100);
         const mappedMessages: ChatMessage[] = [];
         if (msgSnap) {
           msgSnap.forEach((m: any) => {
@@ -1619,7 +1738,7 @@ export default function RoomPage() {
         async () => {
           const { data: mSnap, error } = await supabase
             .from('room_members')
-            .select('*')
+            .select(SAFE_ROOM_MEMBER_COLUMNS)
             .eq('room_id', room.id);
 
           if (error) {
@@ -1637,7 +1756,13 @@ export default function RoomPage() {
             if (currentInDB.is_banned) {
               setIsBanned(true);
             }
-            setCurrentMember(currentInDB);
+            // session_id is intentionally not selectable from room_members.
+            // Reattach the current guest's browser-held token after a realtime refresh.
+            const storedGuest = currentInDB.guest_id ? getStoredGuestSession() : null;
+            setCurrentMember({
+              ...currentInDB,
+              session_id: storedGuest?.sessionId || currentMember.session_id
+            });
           }
         }
       )
@@ -1790,7 +1915,7 @@ export default function RoomPage() {
       playbackCleanup();
       setPresences({});
     };
-  }, [room, currentMember, supabaseConnected, showToast, syncLocalPlayerWithNewState]);
+  }, [room, currentMember, supabaseConnected, showToast, syncLocalPlayerWithNewState, getStoredGuestSession]);
 
   React.useEffect(() => {
     if (!presenceChannelRef.current || !currentMember) return;
@@ -2349,7 +2474,10 @@ export default function RoomPage() {
                           onTimeUpdate={handleTimeUpdate}
                           onLoadedMetadata={handleLoadedMetadata}
                           onEnded={handleMediaEnded}
-                          onPlay={() => setMediaStatus('Playing')}
+                          onPlay={() => {
+                            setMediaStatus('Playing');
+                            setNeedsPlaybackGesture(false);
+                          }}
                           onPause={() => setMediaStatus('Paused')}
                           onWaiting={() => setMediaStatus('Buffering')}
                         />
@@ -2364,7 +2492,10 @@ export default function RoomPage() {
                         onTimeUpdate={handleTimeUpdate}
                         onLoadedMetadata={handleLoadedMetadata}
                         onEnded={handleMediaEnded}
-                        onPlay={() => setMediaStatus('Playing')}
+                        onPlay={() => {
+                          setMediaStatus('Playing');
+                          setNeedsPlaybackGesture(false);
+                        }}
                         onPause={() => setMediaStatus('Paused')}
                         onWaiting={() => setMediaStatus('Buffering')}
                       />
@@ -2386,6 +2517,21 @@ export default function RoomPage() {
                   </div>
                 )}
               </div>
+
+              {needsPlaybackGesture && (
+                <div role="status" className="relative z-20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 p-3">
+                  <p className="text-xs leading-relaxed text-blue-900 dark:text-blue-100">
+                    Your browser blocked automatic playback. Enable playback once to join the shared session.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleEnablePlayback}
+                    className="shrink-0 px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+                  >
+                    Enable Playback
+                  </button>
+                </div>
+              )}
 
               {/* Time slider & media coordinates */}
               {mediaUrl && (
