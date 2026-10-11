@@ -15,8 +15,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'SyncWave - Real-time Platform Identity',
-  description: 'SyncWave secure development environment, built for instant, reliable profile synchronization.',
+  title: 'SyncWave | Shared Media Portal',
+  description: 'Create or join a shared media room, chat with friends, and synchronize supported audio and video playback in real time.'
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
