@@ -20,9 +20,9 @@ export default function Logo({ className = '', iconOnly = false }: LogoProps) {
       >
         <defs>
           <linearGradient id="waveGradient" x1="0%" y1="0%" x2="100%" y2="50%">
-            <stop offset="0%" stopColor="#22d3ee" /> {/* Cyan 400 */}
-            <stop offset="50%" stopColor="#3b82f6" /> {/* Blue 500 */}
-            <stop offset="100%" stopColor="#d946ef" /> {/* Fuchsia 500 */}
+            <stop offset="0%" stopColor="#005aa9" /> {/* Cyan 400 */}
+            <stop offset="50%" stopColor="#2476bf" /> {/* Blue 500 */}
+            <stop offset="100%" stopColor="#f58220" /> {/* Fuchsia 500 */}
           </linearGradient>
         </defs>
         
@@ -53,7 +53,7 @@ export default function Logo({ className = '', iconOnly = false }: LogoProps) {
       {!iconOnly && (
         <span 
           id="logo-text" 
-          className="font-sans font-bold tracking-tight text-xl bg-gradient-to-r from-cyan-400 via-blue-500 to-fuchsia-500 bg-clip-text text-transparent"
+          className="font-sans font-bold tracking-tight text-xl text-stone-900 dark:text-white"
         >
           SyncWave
         </span>
