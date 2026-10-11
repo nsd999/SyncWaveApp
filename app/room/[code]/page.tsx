@@ -358,16 +358,21 @@ export default function RoomPage() {
 
     setGuestSubmitting(true);
     setGuestError(null);
+    const guestJoinController = new AbortController();
+    const guestJoinTimeout = window.setTimeout(() => guestJoinController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
 
     try {
       const trimmedName = guestNameInput.trim();
-      const safeName = await getUniqueGuestName(room.id, trimmedName);
+      const safeName = await getUniqueGuestName(room.id, trimmedName, guestJoinController.signal);
 
       const { data: checkSnap, error: checkError } = await supabase
         .from('room_members')
         .select('is_banned')
         .eq('room_id', room.id)
-        .eq('display_name', safeName);
+        .eq('display_name', safeName)
+        .abortSignal(guestJoinController.signal);
+
+      if (checkError) throw new Error('Could not verify guest access. Check your connection and try again.');
 
       let isBannedMatch = false;
       if (checkSnap) {
@@ -396,7 +401,12 @@ export default function RoomPage() {
         joined_at: new Date().toISOString()
       };
 
-      const { data: docRef, error: insertError } = await supabase.from('room_members').insert([newGuest]).select(SAFE_ROOM_MEMBER_COLUMNS).single();
+      const { data: docRef, error: insertError } = await supabase
+        .from('room_members')
+        .insert([newGuest])
+        .select(SAFE_ROOM_MEMBER_COLUMNS)
+        .abortSignal(guestJoinController.signal)
+        .single();
       if (insertError) throw insertError;
       const row = docRef as RoomMember;
 
@@ -408,6 +418,7 @@ export default function RoomPage() {
     } catch (err: any) {
       setGuestError(err.message || 'Operation forbidden by server constraints.');
     } finally {
+      window.clearTimeout(guestJoinTimeout);
       setGuestSubmitting(false);
     }
   };
