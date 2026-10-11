@@ -30,6 +30,8 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useTheme } from 'next-themes';
 
+const ROOM_LOOKUP_TIMEOUT_MS = 8000;
+
 export const dynamic = 'force-dynamic';
 
 function getProjectRef(url: string | undefined): string {
@@ -209,15 +211,32 @@ export default function Home() {
     setJoinError(null);
 
     try {
-      const { data: snap, error: snapError } = await supabase
-        .from('rooms')
-        .select('*')
-        .eq('slug', formattedCode)
-        .single();
+      const lookupController = new AbortController();
+      const lookupTimeout = window.setTimeout(() => lookupController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
+      let snap: any = null;
+      let snapError: any = null;
+      try {
+        const result = await supabase
+          .from('rooms')
+          .select('*')
+          .eq('slug', formattedCode)
+          .abortSignal(lookupController.signal)
+          .single();
+        snap = result.data;
+        snapError = result.error;
+      } finally {
+        window.clearTimeout(lookupTimeout);
+      }
 
       if (snapError || !snap) {
-        showToast("👀 We couldn't find that lounge.\nDouble-check the code or ask your friend for a fresh invite.", "error");
-        writeLog('error', 'Lounge synced', `Lounge code "${formattedCode}" is inactive or missing.`);
+        const isNotFound = snapError?.code === 'PGRST116' || (!snapError && !snap);
+        if (isNotFound) {
+          showToast("We couldn't find that room code. Check the code or ask the host for a fresh invite.", "error");
+          writeLog('warn', 'Lounge synced', `Room code "${formattedCode}" was not found.`);
+        } else {
+          showToast("The room service did not respond. Check your connection and try again.", "error");
+          writeLog('error', 'Lounge synced', `Room lookup failed for "${formattedCode}": ${snapError?.message || 'request timed out'}`);
+        }
         setJoiningRoom(false);
         return;
       }
