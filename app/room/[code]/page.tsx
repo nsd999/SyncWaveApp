@@ -2074,7 +2074,7 @@ export default function RoomPage() {
           </div>
           <div className="space-y-2">
             <h2 className="text-xl font-extrabold tracking-tight">Unable to load room</h2>
-            <p className="text-xs font-mono text-stone-400 uppercase tracking-wider">Error: REGISTRY_REGISTRATION_FAILED</p>
+            <p className="text-xs text-stone-400 leading-relaxed">Check the room link or code, then try again.</p>
           </div>
           <p className="text-sm text-stone-300 leading-relaxed bg-stone-950 p-3 rounded-xl border border-stone-850 font-mono text-left break-words max-h-40 overflow-y-auto">
             {initError}
