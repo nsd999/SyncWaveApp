@@ -81,6 +81,8 @@ const MEDIA_PRESETS = [
   { name: 'Chill Beats (Audio)', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3', type: 'audio' },
 ];
 
+const ROOM_LOOKUP_TIMEOUT_MS = 8000;
+
 export const dynamic = 'force-dynamic';
 
 export default function RoomPage() {
@@ -322,6 +324,7 @@ export default function RoomPage() {
         const memberData = existingMembers[0] as RoomMember;
         if (memberData.is_banned) {
           setIsBanned(true);
+          setLoading(false);
           return;
         }
         setCurrentMember(memberData);
@@ -344,7 +347,8 @@ export default function RoomPage() {
     } catch (err: any) {
       console.error('[SyncWave Join Debug] Error inside joinRoomAsRegisteredUser:', err);
       writeLog('error', 'Lounge synced', `Failed to join lounge: ${err.message}`);
-      setInitError(err.message || 'Error occurred while joining room session.');
+      setInitError('SyncWave could not finish joining this room. Check your connection and try again.');
+      setLoading(false);
     }
   }, []);
 
@@ -1657,10 +1661,29 @@ export default function RoomPage() {
 
     const initRoom = async () => {
       try {
-        const { data: snap, error } = await supabase.from('rooms').select('*').eq('slug', roomCode).single();
+        const lookupController = new AbortController();
+        const lookupTimeout = window.setTimeout(() => lookupController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
+        let snap: any = null;
+        let error: any = null;
+        try {
+          const result = await supabase
+            .from('rooms')
+            .select('*')
+            .eq('slug', roomCode)
+            .abortSignal(lookupController.signal)
+            .single();
+          snap = result.data;
+          error = result.error;
+        } finally {
+          window.clearTimeout(lookupTimeout);
+        }
 
         if (error || !snap) {
-          setRoom(null);
+          if (error?.code === 'PGRST116' || (!error && !snap)) {
+            setRoom(null);
+          } else {
+            setInitError('SyncWave could not reach the room service. Check your connection and try again.');
+          }
           setLoading(false);
           return;
         }
