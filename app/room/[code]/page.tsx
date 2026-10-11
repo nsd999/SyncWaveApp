@@ -244,6 +244,8 @@ export default function RoomPage() {
   const ytPlayerRef = React.useRef<any>(null);
   const playbackStateRef = React.useRef<PlaybackState | null>(null);
   const handleMediaEndedRef = React.useRef<(() => Promise<void>) | null>(null);
+  const lastAppliedMediaUrlRef = React.useRef<string | null>(null);
+  const lastPlaybackPublishAtRef = React.useRef(0);
   const isUpdatingFromRemote = React.useRef(false); // Guard for infinite loops
   const pendingAutoplayRef = React.useRef(false);
   const chatChannelRef = React.useRef<any>(null);
@@ -797,15 +799,23 @@ export default function RoomPage() {
             const stateMatchesPlayer = Boolean(
               latestState?.media_url && getYouTubeId(latestState.media_url) === videoId
             );
-            const startTime = stateMatchesPlayer
-              ? Math.max(0, Number(latestState?.current_time) || 0)
+            const readyRate = stateMatchesPlayer
+              ? (Number(latestState?.playback_rate) || 1)
+              : playbackRate;
+            const readySyncAt = latestState?.last_sync_at ? Date.parse(latestState.last_sync_at) : NaN;
+            const readyElapsed = stateMatchesPlayer && latestState?.is_playing && Number.isFinite(readySyncAt)
+              ? Math.max(0, (Date.now() - readySyncAt) / 1000)
+              : 0;
+            const readyEstimatedTime = stateMatchesPlayer
+              ? Math.max(0, Number(latestState?.current_time) || 0) + readyElapsed * readyRate
               : Math.max(0, currentTime);
+            const startTime = stateMatchesPlayer && Number(latestState?.duration) > 0
+              ? Math.min(readyEstimatedTime, Number(latestState?.duration))
+              : readyEstimatedTime;
             const shouldPlay = stateMatchesPlayer
               ? Boolean(latestState?.is_playing)
               : (isPlaying || pendingAutoplayRef.current);
-            const targetRate = stateMatchesPlayer
-              ? (Number(latestState?.playback_rate) || 1)
-              : playbackRate;
+            const targetRate = readyRate;
 
             try {
               event.target.setPlaybackRate?.(targetRate);
@@ -905,9 +915,9 @@ export default function RoomPage() {
             setDuration(ytPlayerRef.current.getDuration() || 0);
           }
 
-          if (currentIsHost && room) {
-            // Update time in the database occasionally (throttle rate)
-            PlaybackSyncService.updateTime(room.id, cur, duration || 180, user?.id);
+          if (currentIsHost && room && Date.now() - lastPlaybackPublishAtRef.current >= 3000) {
+            lastPlaybackPublishAtRef.current = Date.now();
+            void PlaybackSyncService.updateTime(room.id, cur, duration || 180, user?.id);
           }
         }
       }, 1000);
@@ -970,8 +980,17 @@ export default function RoomPage() {
       return prevType;
     });
 
-    // 2. Synchronize playback speed/rate!
+    // Estimate where the authoritative playhead should be when this event arrives.
+    // This compensates for realtime/network latency on both YouTube and HTML media.
     const targetRate = Number(newState.playback_rate) || 1;
+    const lastSyncAt = newState.last_sync_at ? Date.parse(newState.last_sync_at) : NaN;
+    const elapsedSeconds = newState.is_playing && Number.isFinite(lastSyncAt)
+      ? Math.max(0, (Date.now() - lastSyncAt) / 1000)
+      : 0;
+    const estimatedTime = Math.max(0, Number(newState.current_time) || 0) + elapsedSeconds * targetRate;
+    const syncTargetTime = Number(newState.duration) > 0
+      ? Math.min(estimatedTime, Number(newState.duration))
+      : estimatedTime;
     setPlaybackRate(targetRate);
 
     if (isYouTube) {
@@ -985,7 +1004,7 @@ export default function RoomPage() {
       } catch {}
       if (!yt || typeof yt.getPlayerState !== 'function' ||
           (targetVideoId && mountedVideoId && targetVideoId !== mountedVideoId)) {
-        setCurrentTime(Math.max(0, Number(newState.current_time) || 0));
+        setCurrentTime(syncTargetTime);
         setIsPlaying(Boolean(newState.is_playing));
         setSyncStatusText('Playback state received; waiting for media player.');
         return;
@@ -1022,11 +1041,11 @@ export default function RoomPage() {
         // Sync timeline seek
         if (typeof yt.getCurrentTime === 'function') {
           const ytTime = yt.getCurrentTime();
-          const lag = Math.abs(ytTime - newState.current_time);
+          const lag = Math.abs(ytTime - syncTargetTime);
           if (lag > 2) {
             try {
-              yt.seekTo(newState.current_time, true);
-              setCurrentTime(newState.current_time);
+              yt.seekTo(syncTargetTime, true);
+              setCurrentTime(syncTargetTime);
             } catch (e) {}
           }
         }
@@ -1037,8 +1056,15 @@ export default function RoomPage() {
         }, 150);
       }
     } else {
-      // Sync HTML5 Video/Audio Player
+      // Sync HTML5 Video/Audio Player. Don't apply a new URL's state to the
+      // previous media element during the render/metadata transition.
       const player = playerRef.current;
+      if (!player || (newState.media_url && player.currentSrc && player.currentSrc !== newState.media_url)) {
+        setCurrentTime(syncTargetTime);
+        setIsPlaying(Boolean(newState.is_playing));
+        setSyncStatusText('Playback state received; waiting for media player.');
+        return;
+      }
       if (player) {
         isUpdatingFromRemote.current = true;
 
@@ -1060,10 +1086,10 @@ export default function RoomPage() {
         }
 
         // Sync timeline seek
-        const lag = Math.abs(player.currentTime - newState.current_time);
+        const lag = Math.abs(player.currentTime - syncTargetTime);
         if (lag > 2) {
-          player.currentTime = newState.current_time;
-          setCurrentTime(newState.current_time);
+          player.currentTime = syncTargetTime;
+          setCurrentTime(syncTargetTime);
         }
 
         setSyncStatusText(`Synced • Last update ${new Date(newState.last_sync_at).toLocaleTimeString()}`);
@@ -1074,23 +1100,33 @@ export default function RoomPage() {
     }
   }, []);
 
-  // Apply the authoritative playback state after the real media element has mounted.
-  // The initial database handshake can complete before the <video> element exists.
+  // Apply the first state for each actual media URL after the element has mounted.
+  // Subsequent playback_state ticks are handled by syncLocalPlayerWithNewState; replaying
+  // this full effect on every tick would repeatedly seek the video backwards.
   React.useEffect(() => {
-    if (!playbackState || !mediaUrl) return;
+    if (!playbackState || !mediaUrl || playbackState.media_url !== mediaUrl) return;
 
     const isYouTube = mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/');
-    if (isYouTube) return;
+    if (isYouTube || lastAppliedMediaUrlRef.current === mediaUrl) return;
 
     const player = playerRef.current;
     if (!player) return;
 
-    const targetTime = Math.max(0, Number(playbackState.current_time) || 0);
-    const targetRate = Number(playbackState.playback_rate) || 1;
-
     const applyState = () => {
+      if (lastAppliedMediaUrlRef.current === mediaUrl) return;
+      lastAppliedMediaUrlRef.current = mediaUrl;
+      const lastSyncAt = playbackState.last_sync_at ? Date.parse(playbackState.last_sync_at) : NaN;
+      const elapsed = playbackState.is_playing && Number.isFinite(lastSyncAt)
+        ? Math.max(0, (Date.now() - lastSyncAt) / 1000)
+        : 0;
+      const rate = Number(playbackState.playback_rate) || 1;
+      const estimatedTime = Math.max(0, Number(playbackState.current_time) || 0) + elapsed * rate;
+      const targetTime = Number(playbackState.duration) > 0
+        ? Math.min(estimatedTime, Number(playbackState.duration))
+        : estimatedTime;
+
       isUpdatingFromRemote.current = true;
-      player.playbackRate = targetRate;
+      player.playbackRate = rate;
 
       if (Number.isFinite(player.duration) && player.duration > 0) {
         player.currentTime = Math.min(targetTime, player.duration);
@@ -1590,6 +1626,26 @@ export default function RoomPage() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Broadcast a fresh playhead for direct audio/video streams. Without this, guests
+  // can drift after buffering because HTML media only writes on play/pause/seek.
+  React.useEffect(() => {
+    const isYouTube = mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/');
+    if (!room || !currentIsHost || !isPlaying || !mediaUrl || isYouTube) return;
+
+    const timer = window.setInterval(() => {
+      const player = playerRef.current;
+      if (!player || player.paused || player.seeking) return;
+      const position = Math.max(0, Number(player.currentTime) || 0);
+      const actualDuration = Number.isFinite(player.duration) && player.duration > 0
+        ? player.duration
+        : duration;
+      lastPlaybackPublishAtRef.current = Date.now();
+      void PlaybackSyncService.updateTime(room.id, position, actualDuration || 0, user?.id);
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [room, currentIsHost, isPlaying, mediaUrl, user, duration]);
+
   // Setup room core connections and fetch metadata
   React.useEffect(() => {
     if (!supabaseConnected || !roomCode) {
@@ -1685,7 +1741,8 @@ export default function RoomPage() {
 
           const restoredState = {
             ...state,
-            current_time: targetTime
+            current_time: targetTime,
+            last_sync_at: new Date().toISOString()
           };
 
           syncLocalPlayerWithNewState(restoredState);
