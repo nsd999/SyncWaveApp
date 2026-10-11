@@ -130,7 +130,7 @@ export default function LoginPage() {
             <Activity className="w-5 h-5 animate-pulse text-amber-400" />
           </div>
           <h1 className="text-xl font-medium tracking-tight text-stone-900 pt-2 selection:bg-amber-100">Welcome to SyncWave</h1>
-          <p className="text-xs text-stone-500 font-mono">Phase 1 Foundation Access Terminal</p>
+          <p className="text-xs text-stone-500 font-mono">Sign in to your account</p>
         </div>
 
         {isPendingCreate && (
@@ -143,7 +143,7 @@ export default function LoginPage() {
           <div id="login-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <p className="font-semibold text-rose-900">Handshake Rejected</p>
+              <p className="font-semibold text-rose-900">Sign-in failed</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
             </div>
           </div>
@@ -153,7 +153,7 @@ export default function LoginPage() {
           <div id="login-success-alert" className="bg-emerald-50 border border-emerald-200/85 text-emerald-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-semibold text-emerald-950">Handshake Approved</p>
+              <p className="font-semibold text-emerald-950">Sign-in successful</p>
               <p className="mt-0.5 text-stone-600">{successMsg}</p>
             </div>
           </div>
@@ -207,7 +207,7 @@ export default function LoginPage() {
                 href="/forgot-password" 
                 className="text-[11px] font-mono uppercase tracking-wider text-amber-600 hover:text-amber-800 hover:underline cursor-pointer"
               >
-                Reset Keys
+                Forgot password?
               </Link>
             </div>
             <div className="relative">
@@ -234,11 +234,11 @@ export default function LoginPage() {
             {submitting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                <span>Verifying Sig...</span>
+                <span>Signing in...</span>
               </>
             ) : (
               <>
-                <span>Sign In Terminal</span>
+                <span>Sign in</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
@@ -247,12 +247,12 @@ export default function LoginPage() {
         </div>
         <div id="login-footer" className="text-center pt-2 border-t border-stone-100">
           <p className="text-xs text-stone-500">
-            Need a secure wave profile?{' '}
+            New to SyncWave?{' '}
             <Link 
               href="/signup" 
               className="text-amber-600 hover:text-amber-800 hover:underline font-semibold cursor-pointer"
             >
-              Sign Up Form
+              Create an account
             </Link>
           </p>
         </div>
