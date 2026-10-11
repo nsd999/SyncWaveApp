@@ -149,8 +149,8 @@ export default function SignupPage() {
           <div className="mx-auto bg-stone-900 text-stone-50 w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-stone-200 border border-stone-800">
             <Activity className="w-5 h-5 text-amber-400 rotate-185 animate-pulse" />
           </div>
-          <h1 className="text-xl font-medium tracking-tight text-stone-900 pt-2">Create Wave Identity</h1>
-          <p className="text-xs text-stone-500 font-mono">Phase 1 Secure Registration Terminal</p>
+          <h1 className="text-xl font-medium tracking-tight text-stone-900 pt-2">Create your SyncWave account</h1>
+          <p className="text-xs text-stone-500 font-mono">Join shared rooms and listen together</p>
         </div>
 
         {isPendingCreate && (
@@ -238,7 +238,7 @@ export default function SignupPage() {
               </div>
               {proposedUsername && (
                 <p className="text-[10px] font-mono text-zinc-500 pt-1.5 flex items-center justify-between">
-                  <span>Unique Proposed Suffix:</span>
+                  <span>Your username:</span>
                   <span className="text-amber-600 font-bold">@{proposedUsername}</span>
                 </p>
               )}
@@ -270,7 +270,7 @@ export default function SignupPage() {
               {submitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                  <span>Validating Terminal...</span>
+                  <span>Creating account...</span>
                 </>
               ) : (
                 <>
@@ -285,12 +285,12 @@ export default function SignupPage() {
 
         <div id="signup-footer" className="text-center pt-2 border-t border-stone-100">
           <p className="text-xs text-stone-500">
-            Already have a wave identity?{' '}
+            Already have an account?{' '}
             <Link 
               href="/login" 
               className="text-amber-600 hover:text-amber-800 hover:underline font-semibold cursor-pointer"
             >
-              Sign In Terminal
+              Sign in
             </Link>
           </p>
         </div>
