@@ -288,15 +288,26 @@ export default function Home() {
     setJoinError(null);
 
     const formattedCode = verifiedRoomMatch.slug.toUpperCase();
+    const guestJoinController = new AbortController();
+    const guestJoinTimeout = window.setTimeout(() => guestJoinController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
 
     try {
-      const safeName = await getUniqueGuestName(verifiedRoomMatch.id, guestDisplayName.trim());
+      const safeName = await getUniqueGuestName(
+        verifiedRoomMatch.id,
+        guestDisplayName.trim(),
+        guestJoinController.signal
+      );
 
-      const { data: memberSnap } = await supabase
+      const { data: memberSnap, error: memberCheckError } = await supabase
         .from('room_members')
         .select('is_banned')
         .eq('room_id', verifiedRoomMatch.id)
-        .eq('display_name', safeName);
+        .eq('display_name', safeName)
+        .abortSignal(guestJoinController.signal);
+
+      if (memberCheckError) {
+        throw new Error('Could not verify your guest name. Check your connection and try again.');
+      }
         
       let isBanned = false;
       if (memberSnap) {
@@ -314,7 +325,7 @@ export default function Home() {
       const guestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
 
-      await supabase.from('room_members').insert([{
+      const { error: insertGuestError } = await supabase.from('room_members').insert([{
         room_id: verifiedRoomMatch.id,
         guest_id: guestId,
         display_name: safeName,
@@ -322,7 +333,11 @@ export default function Home() {
         is_muted: false,
         is_banned: false,
         joined_at: new Date().toISOString(),
-      }]);
+      }]).abortSignal(guestJoinController.signal);
+
+      if (insertGuestError) throw new Error(
+        'SyncWave could not add you to this room. The host may need to refresh the session.'
+      );
 
       if (typeof window !== 'undefined') {
         localStorage.setItem(`syncwave-guest-${formattedCode}`, JSON.stringify({
@@ -342,6 +357,8 @@ export default function Home() {
       console.error('Failed joining session as guest:', err);
       setJoinError(err.message || 'Could not join lounge. Check your connections.');
       setJoiningRoom(false);
+    } finally {
+      window.clearTimeout(guestJoinTimeout);
     }
   };
 
