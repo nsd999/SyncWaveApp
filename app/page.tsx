@@ -255,7 +255,7 @@ export default function Home() {
       }
     } catch (err: any) {
       console.error('Failed joining session code verification:', err);
-      showToast("⚠️ SyncWave hit a temporary glitch.", "error");
+      showToast("⚠️ Could not connect right now. Check your connection and try again.", "error");
       setJoiningRoom(false);
     }
   };
@@ -336,6 +336,12 @@ export default function Home() {
 
       {/* Navigation Header bar */}
       <header id="landing-header" className="border-b border-stone-200/75 dark:border-stone-850/60 bg-white/80 dark:bg-stone-950/80 backdrop-blur-md sticky top-0 z-30 select-none">
+        <div id="portal-service-strip" className="border-b border-stone-200/70 dark:border-stone-800">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] sm:text-xs text-stone-500 dark:text-stone-300">
+            <span className="font-semibold uppercase tracking-wider text-blue-700 dark:text-cyan-300">SyncWave · Shared Media Portal</span>
+            <span>Hosts sign in · Guests can join with a room code</span>
+          </div>
+        </div>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <Link href="/">
             <Logo />
@@ -474,6 +480,26 @@ export default function Home() {
           </button>
         </div>
 
+        {/* Guided workflow: a clear service-portal entry path. */}
+        <section id="portal-workflow" aria-labelledby="portal-workflow-title" className="w-full max-w-4xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
+          <h2 id="portal-workflow-title" className="sr-only">How SyncWave works</h2>
+          <article className="bg-white dark:bg-stone-900/60 border border-stone-200 dark:border-stone-800 p-4 rounded-xl">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-cyan-300">Step 1</p>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-white mt-2">Create or join a room</h3>
+            <p className="text-xs leading-relaxed text-stone-600 dark:text-stone-300 mt-1">Host a new session or enter the room code shared by a friend.</p>
+          </article>
+          <article className="bg-white dark:bg-stone-900/60 border border-stone-200 dark:border-stone-800 p-4 rounded-xl">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-cyan-300">Step 2</p>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-white mt-2">Choose your media</h3>
+            <p className="text-xs leading-relaxed text-stone-600 dark:text-stone-300 mt-1">Add supported video or audio to the shared queue.</p>
+          </article>
+          <article className="bg-white dark:bg-stone-900/60 border border-stone-200 dark:border-stone-800 p-4 rounded-xl">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-cyan-300">Step 3</p>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-white mt-2">Watch or listen together</h3>
+            <p className="text-xs leading-relaxed text-stone-600 dark:text-stone-300 mt-1">Use shared controls, chat, and room presence to stay together.</p>
+          </article>
+        </section>
+
         {/* Underline quick value statement */}
         <p className="text-xs text-stone-400 font-mono tracking-wider uppercase z-10 flex items-center justify-center gap-1.5 selection:bg-amber-100">
           <Radio className="w-3.5 h-3.5 animate-pulse text-cyan-500" />
@@ -493,7 +519,7 @@ export default function Home() {
               </div>
               <h3 className="font-semibold text-stone-900 dark:text-stone-50 text-sm mb-1">Perfect Synchronization</h3>
               <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
-                Connect and witness zero-lag real-time media synchronization. Playback controls update immediately across all active lounge listeners.
+                Connect and keep supported media playback synchronized in real time. Playback controls update immediately across all active lounge listeners.
               </p>
             </div>
             {/* Feature 2 */}
@@ -525,8 +551,8 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 text-xs text-stone-500 font-sans flex flex-col sm:flex-row items-center justify-between gap-3">
           <p>© 2026 SyncWave. All systems nominal.</p>
           <div className="flex space-x-4">
-            <Link href="/login" className="hover:text-stone-950 transition font-medium">Terminal Login</Link>
-            <Link href="/signup" className="hover:text-stone-950 transition font-medium">Register Credentials</Link>
+            <Link href="/login" className="hover:text-stone-950 transition font-medium">Sign in</Link>
+            <Link href="/signup" className="hover:text-stone-950 transition font-medium">Create account</Link>
           </div>
         </div>
       </footer>
