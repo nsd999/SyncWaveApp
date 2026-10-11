@@ -39,15 +39,21 @@ export function generateRoomCode(): string {
   return result;
 }
 
-export async function getUniqueGuestName(roomId: string, baseName: string): Promise<string> {
+export async function getUniqueGuestName(
+  roomId: string,
+  baseName: string,
+  signal?: AbortSignal
+): Promise<string> {
   try {
     const trimmed = baseName.trim();
-    
-    const { data, error } = await supabase
+
+    let query = supabase
       .from('room_members')
       .select('display_name, profiles(display_name)')
       .eq('room_id', roomId);
-      
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
+
     if (error) throw error;
 
     const existingNames = new Set<string>();
