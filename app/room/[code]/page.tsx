@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 import { getUniqueGuestName, Room, RoomMember } from '@/lib/room';
@@ -1663,7 +1663,13 @@ export default function RoomPage() {
 
   // Setup room core connections and fetch metadata
   React.useEffect(() => {
-    if (!supabaseConnected || !roomCode) {
+    if (!roomCode) {
+      setInitError('This room link is missing a room code. Open the invite link shared by the host.');
+      setLoading(false);
+      return;
+    }
+    if (!supabaseConnected) {
+      setInitError(SUPABASE_CONFIGURATION_MESSAGE);
       setLoading(false);
       return;
     }
