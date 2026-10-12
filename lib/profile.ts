@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase } from './syncwave-supabase-client';
 import { generateUniqueUsername } from './username';
 
 export interface Profile {

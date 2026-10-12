@@ -1,4 +1,4 @@
-import { supabase } from '../supabase';
+import { supabase } from '../syncwave-supabase-client';
 
 export function normalizeRoomSlug(slug: string): string {
   return slug.trim().toUpperCase();

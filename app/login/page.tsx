@@ -3,9 +3,10 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/syncwave-supabase-client';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
+import { getAuthRedirectUrl } from '@/lib/auth-redirect';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity } from 'lucide-react';
 
@@ -17,11 +18,61 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
   const [isPendingCreate, setIsPendingCreate] = React.useState(false);
+  const [supabaseHealthStatus, setSupabaseHealthStatus] = React.useState<'checking' | 'connected' | 'not_configured' | 'schema_missing' | 'unavailable'>('checking');
+  const [supabaseHealthMessage, setSupabaseHealthMessage] = React.useState('Checking the SyncWave database connection…');
 
   React.useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true') {
       setIsPendingCreate(true);
     }
+  }, []);
+
+  React.useEffect(() => {
+    let disposed = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
+
+    if (!isSupabaseConfigured()) {
+      setSupabaseHealthStatus('not_configured');
+      setSupabaseHealthMessage(SUPABASE_CONFIGURATION_MESSAGE);
+      window.clearTimeout(timeout);
+      return () => {
+        disposed = true;
+        controller.abort();
+      };
+    }
+
+    fetch('/api/health/supabase', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (disposed) return;
+        const status = data.status === 'connected' ? 'connected'
+          : data.status === 'not_configured' ? 'not_configured'
+          : data.status === 'schema_missing' ? 'schema_missing'
+          : 'unavailable';
+        setSupabaseHealthStatus(status);
+        setSupabaseHealthMessage(
+          typeof data.message === 'string' && data.message.trim()
+            ? data.message
+            : 'SyncWave could not verify its database connection.'
+        );
+      })
+      .catch((error: any) => {
+        if (disposed) return;
+        setSupabaseHealthStatus('unavailable');
+        setSupabaseHealthMessage(
+          error?.name === 'AbortError'
+            ? 'The SyncWave database health check timed out. Try again shortly.'
+            : 'SyncWave could not reach the room database. Check the project connection and try again.'
+        );
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, []);
 
   const handleGoogleLogin = async () => {
@@ -32,14 +83,17 @@ export default function LoginPage() {
 
     writeLog('info', 'Google Login started', `Executing Google login transaction`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase engine is unconfigured in this applet.');
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: getAuthRedirectUrl() }
+      });
       if (error) throw error;
       
       setSuccessMsg('Redirecting to Google...');
@@ -72,8 +126,8 @@ export default function LoginPage() {
 
     writeLog('info', 'Login started', `Executing login transaction for: ${email}`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase engine is unconfigured in this applet.');
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
@@ -126,8 +180,14 @@ export default function LoginPage() {
             <Activity className="w-5 h-5 animate-pulse text-amber-400" />
           </div>
           <h1 className="text-xl font-medium tracking-tight text-stone-900 pt-2 selection:bg-amber-100">Welcome to SyncWave</h1>
-          <p className="text-xs text-stone-500 font-mono">Phase 1 Foundation Access Terminal</p>
+          <p className="text-xs text-stone-500 font-mono">Sign in to your account</p>
         </div>
+
+        {supabaseHealthStatus !== 'connected' && (
+          <div id="database-configuration-warning" role="alert" aria-live="polite" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+            {supabaseHealthMessage}
+          </div>
+        )}
 
         {isPendingCreate && (
           <div id="pending-create-alert" className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-xl text-xs leading-relaxed text-center font-medium animate-fade-in shadow-sm">
@@ -139,7 +199,7 @@ export default function LoginPage() {
           <div id="login-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <p className="font-semibold text-rose-900">Handshake Rejected</p>
+              <p className="font-semibold text-rose-900">Sign-in failed</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
             </div>
           </div>
@@ -149,7 +209,7 @@ export default function LoginPage() {
           <div id="login-success-alert" className="bg-emerald-50 border border-emerald-200/85 text-emerald-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-semibold text-emerald-950">Handshake Approved</p>
+              <p className="font-semibold text-emerald-950">Sign-in successful</p>
               <p className="mt-0.5 text-stone-600">{successMsg}</p>
             </div>
           </div>
@@ -159,7 +219,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={handleGoogleLogin}
-            disabled={submitting}
+            disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
             className="w-full bg-white border border-stone-200 text-stone-700 py-2 rounded-lg text-xs font-semibold tracking-wider hover:bg-stone-50 active:scale-98 transition flex items-center justify-center space-x-2 shadow-sm pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -187,7 +247,7 @@ export default function LoginPage() {
               <input
                 type="email"
                 required
-                disabled={submitting}
+                disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                 placeholder="sai@syncwave.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -203,7 +263,7 @@ export default function LoginPage() {
                 href="/forgot-password" 
                 className="text-[11px] font-mono uppercase tracking-wider text-amber-600 hover:text-amber-800 hover:underline cursor-pointer"
               >
-                Reset Keys
+                Forgot password?
               </Link>
             </div>
             <div className="relative">
@@ -213,7 +273,7 @@ export default function LoginPage() {
               <input
                 type="password"
                 required
-                disabled={submitting}
+                disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -224,17 +284,17 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
             className="w-full bg-stone-900 text-stone-100 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase hover:bg-stone-850 active:scale-98 transition flex items-center justify-center space-x-1.5 shadow-md shadow-stone-200 hover:shadow-stone-300 pointer mt-2 cursor-pointer disabled:bg-stone-400 disabled:cursor-not-allowed"
           >
             {submitting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                <span>Verifying Sig...</span>
+                <span>Signing in...</span>
               </>
             ) : (
               <>
-                <span>Sign In Terminal</span>
+                <span>Sign in</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
@@ -243,12 +303,12 @@ export default function LoginPage() {
         </div>
         <div id="login-footer" className="text-center pt-2 border-t border-stone-100">
           <p className="text-xs text-stone-500">
-            Need a secure wave profile?{' '}
+            New to SyncWave?{' '}
             <Link 
               href="/signup" 
               className="text-amber-600 hover:text-amber-800 hover:underline font-semibold cursor-pointer"
             >
-              Sign Up Form
+              Create an account
             </Link>
           </p>
         </div>

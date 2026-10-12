@@ -3,9 +3,10 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/syncwave-supabase-client';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
+import { getAuthRedirectUrl } from '@/lib/auth-redirect';
 import { cleanBaseUsername } from '@/lib/username';
 import { writeLog } from '@/lib/logger';
 import { Mail, Key, ShieldAlert, CheckCircle, ArrowRight, Loader2, Activity, User } from 'lucide-react';
@@ -19,6 +20,8 @@ export default function SignupPage() {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
   const [isPendingCreate, setIsPendingCreate] = React.useState(false);
+  const [supabaseHealthStatus, setSupabaseHealthStatus] = React.useState<'checking' | 'connected' | 'not_configured' | 'schema_missing' | 'unavailable'>('checking');
+  const [supabaseHealthMessage, setSupabaseHealthMessage] = React.useState('Checking the SyncWave database connection…');
 
   React.useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true') {
@@ -28,6 +31,54 @@ export default function SignupPage() {
 
   const proposedUsername = email ? cleanBaseUsername(email.split('@')[0]) : '';
 
+  React.useEffect(() => {
+    let disposed = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
+
+    if (!isSupabaseConfigured()) {
+      setSupabaseHealthStatus('not_configured');
+      setSupabaseHealthMessage(SUPABASE_CONFIGURATION_MESSAGE);
+      window.clearTimeout(timeout);
+      return () => {
+        disposed = true;
+        controller.abort();
+      };
+    }
+
+    fetch('/api/health/supabase', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (disposed) return;
+        const status = data.status === 'connected' ? 'connected'
+          : data.status === 'not_configured' ? 'not_configured'
+          : data.status === 'schema_missing' ? 'schema_missing'
+          : 'unavailable';
+        setSupabaseHealthStatus(status);
+        setSupabaseHealthMessage(
+          typeof data.message === 'string' && data.message.trim()
+            ? data.message
+            : 'SyncWave could not verify its database connection.'
+        );
+      })
+      .catch((error: any) => {
+        if (disposed) return;
+        setSupabaseHealthStatus('unavailable');
+        setSupabaseHealthMessage(
+          error?.name === 'AbortError'
+            ? 'The SyncWave database health check timed out. Try again shortly.'
+            : 'SyncWave could not reach the room database. Check the project connection and try again.'
+        );
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
+
   const handleGoogleSignup = async () => {
     if (submitting) return;
     setSubmitting(true);
@@ -36,14 +87,17 @@ export default function SignupPage() {
 
     writeLog('info', 'Google Signup started', `Attempting Google signup`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase client is unconfigured in this applet.');
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: getAuthRedirectUrl() }
+      });
       if (error) throw error;
       setSuccessMsg('Redirecting to Google...');
     } catch (err: any) {
@@ -80,8 +134,8 @@ export default function SignupPage() {
 
     writeLog('info', 'Signup started', `Attempting signup for: ${email}`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase client is unconfigured in this applet.');
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
@@ -91,12 +145,20 @@ export default function SignupPage() {
         email: email.trim(),
         password,
         options: {
-          data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' }
+          data: { display_name: displayName.trim() || email.split('@')[0] || 'New Member' },
+          emailRedirectTo: getAuthRedirectUrl()
         }
       });
       if (error) throw error;
       
       const user = data.user;
+
+      if (user && !data.session) {
+        writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
+        setSuccessMsg('Account created. Check your email to confirm your address, then sign in to SyncWave.');
+        setSubmitting(false);
+        return;
+      }
 
       if (user) {
         writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
@@ -137,9 +199,15 @@ export default function SignupPage() {
           <div className="mx-auto bg-stone-900 text-stone-50 w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-stone-200 border border-stone-800">
             <Activity className="w-5 h-5 text-amber-400 rotate-185 animate-pulse" />
           </div>
-          <h1 className="text-xl font-medium tracking-tight text-stone-900 pt-2">Create Wave Identity</h1>
-          <p className="text-xs text-stone-500 font-mono">Phase 1 Secure Registration Terminal</p>
+          <h1 className="text-xl font-medium tracking-tight text-stone-900 pt-2">Create your SyncWave account</h1>
+          <p className="text-xs text-stone-500 font-mono">Join shared rooms and listen together</p>
         </div>
+
+        {supabaseHealthStatus !== 'connected' && (
+          <div id="database-configuration-warning" role="alert" aria-live="polite" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+            {supabaseHealthMessage}
+          </div>
+        )}
 
         {isPendingCreate && (
           <div id="pending-create-alert" className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-xl text-xs leading-relaxed text-center font-medium animate-fade-in shadow-sm">
@@ -151,7 +219,7 @@ export default function SignupPage() {
           <div id="signup-error-alert" className="bg-rose-50 border border-rose-200/85 text-rose-800 p-3 rounded-lg flex items-start space-x-2 text-xs leading-relaxed animate-fade-in">
             <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <p className="font-semibold text-rose-900">Registration Denied</p>
+              <p className="font-semibold text-rose-900">Registration Problem</p>
               <p className="mt-0.5 text-stone-600">{errorMsg}</p>
             </div>
           </div>
@@ -172,7 +240,7 @@ export default function SignupPage() {
             <button
               type="button"
               onClick={handleGoogleSignup}
-              disabled={submitting}
+              disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
               className="w-full bg-white border border-stone-200 text-stone-700 py-2 rounded-lg text-xs font-semibold tracking-wider hover:bg-stone-50 active:scale-98 transition flex items-center justify-center space-x-2 shadow-sm pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -199,7 +267,7 @@ export default function SignupPage() {
                 </span>
                 <input
                   type="text"
-                  disabled={submitting}
+                  disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                   placeholder="Sai Dheeraj"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
@@ -217,7 +285,7 @@ export default function SignupPage() {
                 <input
                   type="email"
                   required
-                  disabled={submitting}
+                  disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                   placeholder="sai@syncwave.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -226,7 +294,7 @@ export default function SignupPage() {
               </div>
               {proposedUsername && (
                 <p className="text-[10px] font-mono text-zinc-500 pt-1.5 flex items-center justify-between">
-                  <span>Unique Proposed Suffix:</span>
+                  <span>Your username:</span>
                   <span className="text-amber-600 font-bold">@{proposedUsername}</span>
                 </p>
               )}
@@ -241,7 +309,7 @@ export default function SignupPage() {
                 <input
                   type="password"
                   required
-                  disabled={submitting}
+                  disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -252,13 +320,13 @@ export default function SignupPage() {
 
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
               className="w-full bg-stone-900 text-stone-100 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase hover:bg-stone-850 active:scale-98 transition flex items-center justify-center space-x-1.5 shadow-md shadow-stone-200 pointer mt-2 cursor-pointer disabled:bg-stone-400"
             >
               {submitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                  <span>Validating Terminal...</span>
+                  <span>Creating account...</span>
                 </>
               ) : (
                 <>
@@ -273,12 +341,12 @@ export default function SignupPage() {
 
         <div id="signup-footer" className="text-center pt-2 border-t border-stone-100">
           <p className="text-xs text-stone-500">
-            Already have a wave identity?{' '}
+            Already have an account?{' '}
             <Link 
               href="/login" 
               className="text-amber-600 hover:text-amber-800 hover:underline font-semibold cursor-pointer"
             >
-              Sign In Terminal
+              Sign in
             </Link>
           </p>
         </div>

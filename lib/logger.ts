@@ -60,10 +60,21 @@ export function clearLogs() {
   window.dispatchEvent(new CustomEvent('syncwave-new-log'));
 }
 export function getDiagnosticsReport() {
+  // A browser-side helper cannot independently certify that CI, TypeScript, or
+  // server runtime checks passed. Report only facts this runtime can observe.
+  const configured = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
+    (
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
+    )
+  );
+
   return {
-    buildCheck: "passed",
-    typeCheck: "passed",
-    runtimeCheck: "passed",
-    authClient: typeof window !== 'undefined' && !!localStorage.getItem('syncwave-auth-token') ? "active_session" : "ready"
+    buildCheck: "not_verified_in_browser",
+    typeCheck: "not_verified_in_browser",
+    runtimeCheck: "not_verified_in_browser",
+    supabaseConfig: configured ? "configured" : "missing_environment_variables",
+    authClient: "not_checked_by_browser_diagnostics"
   };
 }

@@ -11,6 +11,7 @@ export function getFriendlyErrorMessage(err: any): string {
 
   // Network or connectivity issues
   if (
+    err?.name === 'TypeError' ||
     message.includes('network') ||
     message.includes('fetch') ||
     message.includes('failed to fetch') ||
@@ -18,7 +19,7 @@ export function getFriendlyErrorMessage(err: any): string {
     message.includes('offline') ||
     message.includes('timeout')
   ) {
-    return "We couldn't connect right now. Check your internet and try again.";
+    return "We couldn't reach the authentication server. Check your connection and try again.";
   }
 
   // Invalid login credentials, wrong password, user not found

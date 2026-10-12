@@ -4,11 +4,13 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/syncwave-supabase-client';
 import { generateRoomCode, getUniqueGuestName } from '@/lib/room';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 import Logo from '@/components/Logo';
+import { FaqAccordion } from '@/components/ui/faq-accordion';
+import { AnimatedButton } from '@/components/ui/animated-button';
 import { 
   Plus, 
   ArrowRight, 
@@ -30,6 +32,8 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useTheme } from 'next-themes';
 
+const ROOM_LOOKUP_TIMEOUT_MS = 8000;
+
 export const dynamic = 'force-dynamic';
 
 function getProjectRef(url: string | undefined): string {
@@ -45,7 +49,10 @@ function getProjectRef(url: string | undefined): string {
 export default function Home() {
   const router = useRouter();
   const { user, profile, loading, signOut } = useAuth();
-  
+  const supabaseConfigured = isSupabaseConfigured();
+  const [supabaseHealthStatus, setSupabaseHealthStatus] = React.useState<'checking' | 'connected' | 'not_configured' | 'schema_missing' | 'unavailable'>('checking');
+  const [supabaseHealthMessage, setSupabaseHealthMessage] = React.useState('Checking room and account services…');
+
   const { theme, setTheme, resolvedTheme = 'dark' } = useTheme();
 
   // Dialog / Modal triggers
@@ -76,6 +83,53 @@ export default function Home() {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 5000);
   }, []);
+
+  // Check actual Supabase reachability/schema; env-variable presence alone isn't enough.
+  React.useEffect(() => {
+    if (!supabaseConfigured) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSupabaseHealthStatus('not_configured');
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSupabaseHealthMessage(SUPABASE_CONFIGURATION_MESSAGE);
+      return;
+    }
+
+    let disposed = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
+
+    fetch('/api/health/supabase', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (disposed) return;
+        const status = data.status === 'connected' ? 'connected'
+          : data.status === 'not_configured' ? 'not_configured'
+          : data.status === 'schema_missing' ? 'schema_missing'
+          : 'unavailable';
+        setSupabaseHealthStatus(status);
+        setSupabaseHealthMessage(
+          typeof data.message === 'string' && data.message.trim()
+            ? data.message
+            : 'SyncWave could not verify its room database connection.'
+        );
+      })
+      .catch((error: any) => {
+        if (disposed) return;
+        setSupabaseHealthStatus('unavailable');
+        setSupabaseHealthMessage(
+          error?.name === 'AbortError'
+            ? 'The SyncWave room database health check timed out. Try again shortly.'
+            : 'SyncWave could not reach the room database. Check the connection and try again.'
+        );
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [supabaseConfigured]);
 
   // Resume active pending flows on mount
   React.useEffect(() => {
@@ -124,6 +178,10 @@ export default function Home() {
   const submitCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || creatingRoom || !createName.trim()) return;
+    if (!supabaseConfigured || supabaseHealthStatus !== 'connected') {
+      setCreateError(supabaseHealthMessage);
+      return;
+    }
 
     setCreatingRoom(true);
     setCreateError(null);
@@ -156,7 +214,7 @@ export default function Home() {
       if (roomError) throw roomError;
       const roomId = roomDoc.id;
 
-      await supabase.from('room_members').insert([{
+      const { error: memberError } = await supabase.from('room_members').insert([{
         room_id: roomId,
         user_id: user.id,
         display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host',
@@ -164,6 +222,10 @@ export default function Home() {
         is_banned: false,
         joined_at: new Date().toISOString(),
       }]);
+
+      if (memberError) {
+        throw new Error(`Room created, but host membership failed: ${memberError.message}`);
+      }
 
       const defaultState = {
         room_id: roomId,
@@ -176,7 +238,10 @@ export default function Home() {
         last_sync_at: new Date().toISOString()
       };
 
-      await supabase.from('playback_state').insert([defaultState]);
+      const { error: playbackError } = await supabase.from('playback_state').insert([defaultState]);
+      if (playbackError) {
+        throw new Error(`Room created, but playback state initialization failed: ${playbackError.message}`);
+      }
 
       writeLog('success', 'Lounge synced', `Successfully generated Sound Lounge "${createName}" [${activeCode}]`);
       setShowCreateModal(false);
@@ -197,20 +262,42 @@ export default function Home() {
       return;
     }
     if (joiningRoom) return;
+    if (!supabaseConfigured || supabaseHealthStatus !== 'connected') {
+      setJoinError(supabaseHealthMessage);
+      showToast(supabaseHealthMessage, "error");
+      return;
+    }
 
     setJoiningRoom(true);
     setJoinError(null);
 
     try {
-      const { data: snap, error: snapError } = await supabase
-        .from('rooms')
-        .select('*')
-        .eq('slug', formattedCode)
-        .single();
+      const lookupController = new AbortController();
+      const lookupTimeout = window.setTimeout(() => lookupController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
+      let snap: any = null;
+      let snapError: any = null;
+      try {
+        const result = await supabase
+          .from('rooms')
+          .select('*')
+          .eq('slug', formattedCode)
+          .abortSignal(lookupController.signal)
+          .single();
+        snap = result.data;
+        snapError = result.error;
+      } finally {
+        window.clearTimeout(lookupTimeout);
+      }
 
       if (snapError || !snap) {
-        showToast("👀 We couldn't find that lounge.\nDouble-check the code or ask your friend for a fresh invite.", "error");
-        writeLog('error', 'Lounge synced', `Lounge code "${formattedCode}" is inactive or missing.`);
+        const isNotFound = snapError?.code === 'PGRST116' || (!snapError && !snap);
+        if (isNotFound) {
+          showToast("We couldn't find that room code. Check the code or ask the host for a fresh invite.", "error");
+          writeLog('warn', 'Lounge synced', `Room code "${formattedCode}" was not found.`);
+        } else {
+          showToast("The room service did not respond. Check your connection and try again.", "error");
+          writeLog('error', 'Lounge synced', `Room lookup failed for "${formattedCode}": ${snapError?.message || 'request timed out'}`);
+        }
         setJoiningRoom(false);
         return;
       }
@@ -248,7 +335,7 @@ export default function Home() {
       }
     } catch (err: any) {
       console.error('Failed joining session code verification:', err);
-      showToast("⚠️ SyncWave hit a temporary glitch.", "error");
+      showToast("⚠️ Could not connect right now. Check your connection and try again.", "error");
       setJoiningRoom(false);
     }
   };
@@ -262,15 +349,31 @@ export default function Home() {
     setJoinError(null);
 
     const formattedCode = verifiedRoomMatch.slug.toUpperCase();
+    if (!supabaseConfigured || supabaseHealthStatus !== 'connected') {
+      setJoinError(supabaseHealthMessage);
+      setJoiningRoom(false);
+      return;
+    }
+    const guestJoinController = new AbortController();
+    const guestJoinTimeout = window.setTimeout(() => guestJoinController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
 
     try {
-      const safeName = await getUniqueGuestName(verifiedRoomMatch.id, guestDisplayName.trim());
+      const safeName = await getUniqueGuestName(
+        verifiedRoomMatch.id,
+        guestDisplayName.trim(),
+        guestJoinController.signal
+      );
 
-      const { data: memberSnap } = await supabase
+      const { data: memberSnap, error: memberCheckError } = await supabase
         .from('room_members')
         .select('is_banned')
         .eq('room_id', verifiedRoomMatch.id)
-        .eq('display_name', safeName);
+        .eq('display_name', safeName)
+        .abortSignal(guestJoinController.signal);
+
+      if (memberCheckError) {
+        throw new Error('Could not verify your guest name. Check your connection and try again.');
+      }
         
       let isBanned = false;
       if (memberSnap) {
@@ -288,7 +391,7 @@ export default function Home() {
       const guestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
 
-      await supabase.from('room_members').insert([{
+      const { error: insertGuestError } = await supabase.from('room_members').insert([{
         room_id: verifiedRoomMatch.id,
         guest_id: guestId,
         display_name: safeName,
@@ -296,7 +399,11 @@ export default function Home() {
         is_muted: false,
         is_banned: false,
         joined_at: new Date().toISOString(),
-      }]);
+      }]).abortSignal(guestJoinController.signal);
+
+      if (insertGuestError) throw new Error(
+        'SyncWave could not add you to this room. The host may need to refresh the session.'
+      );
 
       if (typeof window !== 'undefined') {
         localStorage.setItem(`syncwave-guest-${formattedCode}`, JSON.stringify({
@@ -316,6 +423,8 @@ export default function Home() {
       console.error('Failed joining session as guest:', err);
       setJoinError(err.message || 'Could not join lounge. Check your connections.');
       setJoiningRoom(false);
+    } finally {
+      window.clearTimeout(guestJoinTimeout);
     }
   };
 
@@ -329,6 +438,12 @@ export default function Home() {
 
       {/* Navigation Header bar */}
       <header id="landing-header" className="border-b border-stone-200/75 dark:border-stone-850/60 bg-white/80 dark:bg-stone-950/80 backdrop-blur-md sticky top-0 z-30 select-none">
+        <div id="portal-service-strip" className="border-b border-stone-200/70 dark:border-stone-800">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] sm:text-xs text-stone-500 dark:text-stone-300">
+            <span className="font-semibold uppercase tracking-wider text-blue-700 dark:text-cyan-300">SyncWave · Shared Media Portal</span>
+            <span>Hosts sign in · Guests can join with a room code</span>
+          </div>
+        </div>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <Link href="/">
             <Logo />
@@ -421,6 +536,20 @@ export default function Home() {
         </div>
       </header>
 
+      {supabaseHealthStatus !== 'connected' && (
+        <div id="database-configuration-warning" role="alert" aria-live="polite" className="w-full border-b border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+          <div className="mx-auto max-w-7xl flex items-start gap-3 text-sm">
+            <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="font-semibold">
+                {supabaseHealthStatus === 'checking' ? 'Checking room and account services…' : 'Room and account services are unavailable.'}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed">{supabaseHealthMessage}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Hero & Content Section */}
       <main id="landing-hero" className="flex-1 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center py-12 md:py-20 z-10 text-center space-y-10">
         
@@ -450,22 +579,44 @@ export default function Home() {
 
         {/* Primary Action Buttons (These are the two largest buttons on the homepage) */}
         <div id="hero-actions" className="flex flex-col sm:flex-row items-stretch justify-center gap-4 w-full max-w-md mx-auto pt-4">
-          <button
+          <AnimatedButton
             onClick={handleCreateRoomClick}
-            className="flex-1 bg-stone-900 text-stone-50 hover:bg-stone-850 py-4 px-6 rounded-2xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-lg hover:shadow-stone-300 hover:scale-[1.02] active:scale-[0.99] flex items-center justify-center space-x-2"
+            tone="primary"
+            className="group flex-1 py-4 px-6 text-sm sm:text-base"
           >
-            <Plus className="w-5 h-5 text-cyan-400 shrink-0" />
+            <Plus className="w-5 h-5 text-cyan-300 shrink-0" />
             <span>Create Room</span>
-          </button>
+          </AnimatedButton>
           
-          <button
+          <AnimatedButton
             onClick={handleJoinRoomClick}
-            className="flex-1 bg-white border border-stone-200 hover:border-stone-400 text-stone-800 py-4 px-6 rounded-2xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.99] flex items-center justify-center space-x-2"
+            tone="secondary"
+            className="group flex-1 py-4 px-6 text-sm sm:text-base"
           >
-            <Users className="w-5 h-5 text-fuchsia-500 shrink-0" />
+            <Users className="w-5 h-5 text-blue-600 dark:text-blue-300 shrink-0" />
             <span>Join Room</span>
-          </button>
+          </AnimatedButton>
         </div>
+
+        {/* Guided workflow: a clear service-portal entry path. */}
+        <section id="portal-workflow" aria-labelledby="portal-workflow-title" className="w-full max-w-4xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
+          <h2 id="portal-workflow-title" className="sr-only">How SyncWave works</h2>
+          <article className="bg-white dark:bg-stone-900/60 border border-stone-200 dark:border-stone-800 p-4 rounded-xl">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-cyan-300">Step 1</p>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-white mt-2">Create or join a room</h3>
+            <p className="text-xs leading-relaxed text-stone-600 dark:text-stone-300 mt-1">Host a new session or enter the room code shared by a friend.</p>
+          </article>
+          <article className="bg-white dark:bg-stone-900/60 border border-stone-200 dark:border-stone-800 p-4 rounded-xl">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-cyan-300">Step 2</p>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-white mt-2">Choose your media</h3>
+            <p className="text-xs leading-relaxed text-stone-600 dark:text-stone-300 mt-1">Add supported video or audio to the shared queue.</p>
+          </article>
+          <article className="bg-white dark:bg-stone-900/60 border border-stone-200 dark:border-stone-800 p-4 rounded-xl">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-cyan-300">Step 3</p>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-white mt-2">Watch or listen together</h3>
+            <p className="text-xs leading-relaxed text-stone-600 dark:text-stone-300 mt-1">Use shared controls, chat, and room presence to stay together.</p>
+          </article>
+        </section>
 
         {/* Underline quick value statement */}
         <p className="text-xs text-stone-400 font-mono tracking-wider uppercase z-10 flex items-center justify-center gap-1.5 selection:bg-amber-100">
@@ -486,7 +637,7 @@ export default function Home() {
               </div>
               <h3 className="font-semibold text-stone-900 dark:text-stone-50 text-sm mb-1">Perfect Synchronization</h3>
               <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
-                Connect and witness zero-lag real-time media synchronization. Playback controls update immediately across all active lounge listeners.
+                Connect and keep supported media playback synchronized in real time. Playback controls update immediately across all active lounge listeners.
               </p>
             </div>
             {/* Feature 2 */}
@@ -511,6 +662,36 @@ export default function Home() {
             </div>
           </div>
         </section>
+
+        {/* Vengeance UI: keyboard-accessible FAQ accordion, tuned to the portal design */}
+        <section id="help-and-faq" className="w-full mt-14 border-t border-stone-200/70 pt-8 dark:border-stone-800">
+          <FaqAccordion
+            title="Questions before you start?"
+            description="A quick guide to rooms, guests, and shared playback."
+            items={[
+              {
+                question: 'Do my friends need to create an account?',
+                answer: 'A host needs an account to create and manage a room. Guests can join an existing room with its code and a display name, without registering.'
+              },
+              {
+                question: 'How do I invite friends?',
+                answer: 'Create a room, then share its room code with the people you want to join. Keep the code private if the session is intended for your group only.'
+              },
+              {
+                question: 'Can SyncWave play any music or video link?',
+                answer: 'No single player supports every website. Use a supported direct audio/video source or a provider supported by the current player. Some services restrict embeds or playback outside their own apps.'
+              },
+              {
+                question: 'What happens if the room or database service is unavailable?',
+                answer: 'Room creation, joining, chat, and synchronized playback require the SyncWave backend to be reachable. If a connection warning appears, retry after the service is restored rather than repeatedly submitting the room code.'
+              },
+              {
+                question: 'Will playback always be perfectly synchronized?',
+                answer: 'Network delay, browser autoplay rules, and media-provider restrictions can affect synchronization. Keep the room open, allow playback when prompted, and use a supported media source for the best results.'
+              }
+            ]}
+          />
+        </section>
       </main>
 
       {/* Footer bar */}
@@ -518,8 +699,8 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 text-xs text-stone-500 font-sans flex flex-col sm:flex-row items-center justify-between gap-3">
           <p>© 2026 SyncWave. All systems nominal.</p>
           <div className="flex space-x-4">
-            <Link href="/login" className="hover:text-stone-950 transition font-medium">Terminal Login</Link>
-            <Link href="/signup" className="hover:text-stone-950 transition font-medium">Register Credentials</Link>
+            <Link href="/login" className="hover:text-stone-950 transition font-medium">Sign in</Link>
+            <Link href="/signup" className="hover:text-stone-950 transition font-medium">Create account</Link>
           </div>
         </div>
       </footer>

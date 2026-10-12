@@ -6,24 +6,24 @@ import './globals.css'; // Global styles
 
 const inter = Inter({
   subsets: ['latin'],
-  variable: '--font-sans',
+  variable: '--font-inter',
 });
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
-  variable: '--font-mono',
+  variable: '--font-jetbrains-mono',
 });
 
 export const metadata: Metadata = {
-  title: 'SyncWave - Real-time Platform Identity',
-  description: 'SyncWave secure development environment, built for instant, reliable profile synchronization.',
+  title: 'SyncWave | Shared Media Portal',
+  description: 'Create or join a shared media room, chat with friends, and synchronize supported audio and video playback in real time.'
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} h-full`} suppressHydrationWarning>
       <body className="font-sans antialiased bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-50 min-h-screen h-full flex flex-col" suppressHydrationWarning>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
           <AuthProvider>
             {children}
           </AuthProvider>
