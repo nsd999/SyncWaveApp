@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase } from './syncwave-supabase-client';
 import { PlaybackState, MediaQueueItem } from '@/types/playback';
 import { writeLog } from './logger';
 
