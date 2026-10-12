@@ -18,11 +18,61 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
   const [isPendingCreate, setIsPendingCreate] = React.useState(false);
+  const [supabaseHealthStatus, setSupabaseHealthStatus] = React.useState<'checking' | 'connected' | 'not_configured' | 'schema_missing' | 'unavailable'>('checking');
+  const [supabaseHealthMessage, setSupabaseHealthMessage] = React.useState('Checking the SyncWave database connection…');
 
   React.useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true') {
       setIsPendingCreate(true);
     }
+  }, []);
+
+  React.useEffect(() => {
+    let disposed = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
+
+    if (!isSupabaseConfigured()) {
+      setSupabaseHealthStatus('not_configured');
+      setSupabaseHealthMessage(SUPABASE_CONFIGURATION_MESSAGE);
+      window.clearTimeout(timeout);
+      return () => {
+        disposed = true;
+        controller.abort();
+      };
+    }
+
+    fetch('/api/health/supabase', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (disposed) return;
+        const status = data.status === 'connected' ? 'connected'
+          : data.status === 'not_configured' ? 'not_configured'
+          : data.status === 'schema_missing' ? 'schema_missing'
+          : 'unavailable';
+        setSupabaseHealthStatus(status);
+        setSupabaseHealthMessage(
+          typeof data.message === 'string' && data.message.trim()
+            ? data.message
+            : 'SyncWave could not verify its database connection.'
+        );
+      })
+      .catch((error: any) => {
+        if (disposed) return;
+        setSupabaseHealthStatus('unavailable');
+        setSupabaseHealthMessage(
+          error?.name === 'AbortError'
+            ? 'The SyncWave database health check timed out. Try again shortly.'
+            : 'SyncWave could not reach the room database. Check the project connection and try again.'
+        );
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, []);
 
   const handleGoogleLogin = async () => {
@@ -33,8 +83,8 @@ export default function LoginPage() {
 
     writeLog('info', 'Google Login started', `Executing Google login transaction`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
@@ -76,8 +126,8 @@ export default function LoginPage() {
 
     writeLog('info', 'Login started', `Executing login transaction for: ${email}`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
@@ -133,9 +183,9 @@ export default function LoginPage() {
           <p className="text-xs text-stone-500 font-mono">Sign in to your account</p>
         </div>
 
-        {!isSupabaseConfigured() && (
-          <div id="database-configuration-warning" role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
-            {SUPABASE_CONFIGURATION_MESSAGE}
+        {supabaseHealthStatus !== 'connected' && (
+          <div id="database-configuration-warning" role="alert" aria-live="polite" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+            {supabaseHealthMessage}
           </div>
         )}
 
@@ -169,7 +219,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={handleGoogleLogin}
-            disabled={submitting || !isSupabaseConfigured()}
+            disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
             className="w-full bg-white border border-stone-200 text-stone-700 py-2 rounded-lg text-xs font-semibold tracking-wider hover:bg-stone-50 active:scale-98 transition flex items-center justify-center space-x-2 shadow-sm pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -197,7 +247,7 @@ export default function LoginPage() {
               <input
                 type="email"
                 required
-                disabled={submitting || !isSupabaseConfigured()}
+                disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                 placeholder="sai@syncwave.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -223,7 +273,7 @@ export default function LoginPage() {
               <input
                 type="password"
                 required
-                disabled={submitting || !isSupabaseConfigured()}
+                disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -234,7 +284,7 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={submitting || !isSupabaseConfigured()}
+            disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
             className="w-full bg-stone-900 text-stone-100 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase hover:bg-stone-850 active:scale-98 transition flex items-center justify-center space-x-1.5 shadow-md shadow-stone-200 hover:shadow-stone-300 pointer mt-2 cursor-pointer disabled:bg-stone-400 disabled:cursor-not-allowed"
           >
             {submitting ? (
