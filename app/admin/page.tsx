@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { updateProfile, getOrCreateProfile } from '@/lib/profile';
 import { writeLog, getLogs, clearLogs, LogEntry } from '@/lib/logger';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/syncwave-supabase-client';
 import { 
   LogOut, 
   Terminal, 
