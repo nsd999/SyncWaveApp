@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/supabase';
 import { generateRoomCode, getUniqueGuestName } from '@/lib/room';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
@@ -47,6 +47,7 @@ function getProjectRef(url: string | undefined): string {
 export default function Home() {
   const router = useRouter();
   const { user, profile, loading, signOut } = useAuth();
+  const supabaseConfigured = isSupabaseConfigured();
   
   const { theme, setTheme, resolvedTheme = 'dark' } = useTheme();
 
@@ -126,6 +127,10 @@ export default function Home() {
   const submitCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || creatingRoom || !createName.trim()) return;
+    if (!supabaseConfigured) {
+      setCreateError(SUPABASE_CONFIGURATION_MESSAGE);
+      return;
+    }
 
     setCreatingRoom(true);
     setCreateError(null);
@@ -206,6 +211,11 @@ export default function Home() {
       return;
     }
     if (joiningRoom) return;
+    if (!supabaseConfigured) {
+      setJoinError(SUPABASE_CONFIGURATION_MESSAGE);
+      showToast(SUPABASE_CONFIGURATION_MESSAGE, "error");
+      return;
+    }
 
     setJoiningRoom(true);
     setJoinError(null);
@@ -288,6 +298,11 @@ export default function Home() {
     setJoinError(null);
 
     const formattedCode = verifiedRoomMatch.slug.toUpperCase();
+    if (!supabaseConfigured) {
+      setJoinError(SUPABASE_CONFIGURATION_MESSAGE);
+      setJoiningRoom(false);
+      return;
+    }
     const guestJoinController = new AbortController();
     const guestJoinTimeout = window.setTimeout(() => guestJoinController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
 
