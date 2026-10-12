@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/syncwave-supabase-client';
 import { User } from '@supabase/supabase-js';
 import { getOrCreateProfile, Profile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
