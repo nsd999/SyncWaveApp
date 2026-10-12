@@ -35,7 +35,11 @@ Never commit `.env.local`, service-role keys, bot tokens, or other private crede
 - `/room/[code]` — synchronized playback, chat, queue, presence, and host controls
 - `/admin` — administrative tools
 
-Database migrations live in `supabase/migrations/`. Apply the appropriate migrations to the intended Supabase project before relying on a fresh deployment.
+For a **new** Supabase project, run `supabase/migrations/schema_and_profiles.sql` in the SQL Editor first, then apply the timestamped migrations in chronological order. That bootstrap script is for initial setup; do not blindly rerun it against a populated database. The playback-state and media-queue alignment migrations are additive and preserve existing rows.
+
+Before testing rooms, set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (or the supported legacy anon key) in Vercel for both Preview and Production, then redeploy. Never use a service-role key in a `NEXT_PUBLIC_*` variable. Apply the migrations to the exact Supabase project configured in Vercel, not an unrelated project.
+
+See `docs/END_TO_END_QA_CHECKLIST.md` for what has been checked and the remaining multi-user verification steps.
 
 ## UX direction
 
