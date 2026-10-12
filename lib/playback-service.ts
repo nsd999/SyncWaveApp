@@ -202,6 +202,8 @@ export class PlaybackSyncService {
         .select('*')
         .eq('room_id', roomId)
         .eq('is_played', false)
+        .not('media_url', 'is', null)
+        .neq('media_url', '')
         .order('position', { ascending: true });
         
       if (error) throw error;
