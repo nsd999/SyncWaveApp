@@ -28,6 +28,13 @@ ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS title TEXT;
 ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
 ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS duration NUMERIC;
 ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS added_by UUID;
+-- Add legacy fields conditionally because older deployments may already use the URL-based schema.
+ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS track_id TEXT;
+ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS track_name TEXT;
+ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS artist_name TEXT;
+ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS duration_ms INTEGER DEFAULT 0;
+ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS added_by_id UUID;
+ALTER TABLE public.media_queue ADD COLUMN IF NOT EXISTS added_by_guest_id UUID;
 
 -- Legacy track IDs that represent playable URLs or YouTube IDs remain usable.
 UPDATE public.media_queue
