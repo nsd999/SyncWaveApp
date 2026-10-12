@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
-import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/syncwave-supabase-client';
 import { generateRoomCode, getUniqueGuestName } from '@/lib/room';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
