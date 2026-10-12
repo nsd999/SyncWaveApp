@@ -10,6 +10,7 @@ import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 import Logo from '@/components/Logo';
 import { FaqAccordion } from '@/components/ui/faq-accordion';
+import { AnimatedButton } from '@/components/ui/animated-button';
 import { 
   Plus, 
   ArrowRight, 
@@ -578,21 +579,23 @@ export default function Home() {
 
         {/* Primary Action Buttons (These are the two largest buttons on the homepage) */}
         <div id="hero-actions" className="flex flex-col sm:flex-row items-stretch justify-center gap-4 w-full max-w-md mx-auto pt-4">
-          <button
+          <AnimatedButton
             onClick={handleCreateRoomClick}
-            className="sw-motion-cta flex-1 bg-stone-900 text-stone-50 hover:bg-stone-850 py-4 px-6 rounded-xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-sm flex items-center justify-center space-x-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
+            tone="primary"
+            className="group flex-1 py-4 px-6 text-sm sm:text-base"
           >
-            <Plus className="w-5 h-5 text-cyan-400 shrink-0" />
+            <Plus className="w-5 h-5 text-cyan-300 shrink-0" />
             <span>Create Room</span>
-          </button>
+          </AnimatedButton>
           
-          <button
+          <AnimatedButton
             onClick={handleJoinRoomClick}
-            className="sw-motion-cta flex-1 bg-white border border-stone-200 hover:border-stone-400 text-stone-800 py-4 px-6 rounded-xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-sm flex items-center justify-center space-x-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
+            tone="secondary"
+            className="group flex-1 py-4 px-6 text-sm sm:text-base"
           >
-            <Users className="w-5 h-5 text-fuchsia-500 shrink-0" />
+            <Users className="w-5 h-5 text-blue-600 dark:text-blue-300 shrink-0" />
             <span>Join Room</span>
-          </button>
+          </AnimatedButton>
         </div>
 
         {/* Guided workflow: a clear service-portal entry path. */}
