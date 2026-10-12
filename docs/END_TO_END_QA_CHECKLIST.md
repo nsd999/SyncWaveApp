@@ -4,7 +4,7 @@
 
 - Browser smoke tests on the Vercel preview verified the homepage renders, the signed-out Create Room dialog opens, Cancel closes it, Sign In/Sign Up navigate to their forms, and `/admin` redirects to login.
 - A deliberately invalid room code and a direct invalid-room URL exposed a Supabase request timeout. The preview did not receive a PostgREST not-found status; requests were aborted before a response.
-- Vercel's environment inspection currently returns no value for `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. The room backend therefore cannot be tested until the intended database is configured.
+- Vercel's environment API marks the Supabase URL and publishable key as sensitive and redacts their values, so that listing alone does not prove the variables are empty. The deployed JavaScript bundle still contains the prior baked-in project configuration, and the live `/api/health/supabase` probe returned HTTP 503 with `SUPABASE_CONNECTION_FAILED`. The configured host is not reachable from the deployment at test time.
 - Code review found and patched missing/overbroad column projections, guest-session token loss during member refresh, missing explicit playhead updates for direct media, duplicate YouTube play/pause writes, false-positive host moderation status, silently swallowed chat sends, false-positive playback writes, missing message Realtime publication setup, and destructive playback/queue reset migrations.
 - No signed-in host + guest session was created during QA. No real YouTube/audio/video stream was played with two participants, and no SQL migration was applied to an unverified database.
 
@@ -42,4 +42,4 @@
 
 ## Current blocker
 
-The Vercel environment is missing values for the Supabase URL and publishable key. Until those are set and the matching schema is applied to that same project, database-backed flows (authentication, room creation/joining, chat, presence, queue, uploads, and synchronized playback) cannot be marked end-to-end passed.
+The deployed Supabase health probe currently returns `SUPABASE_CONNECTION_FAILED`. Confirm or replace the Vercel Supabase URL and publishable key so they point to the intended active SyncWave project, redeploy, and apply the matching schema safely. Until the health endpoint reports `connected` and a real host + guest session is tested, database-backed flows (authentication, room creation/joining, chat, presence, queue, uploads, and synchronized playback) cannot be marked end-to-end passed.
