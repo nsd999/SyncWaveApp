@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '@/lib/syncwave-supabase-client';
 import { Loader2, ShieldAlert } from 'lucide-react';
 
 function decodeOAuthError(value: string): string {
