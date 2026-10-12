@@ -470,3 +470,13 @@ textarea:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Vengeance UI-inspired interaction layer, tuned for SyncWave's SAHAJ-style portal. */
+.sw-motion-card { position: relative; isolation: isolate; transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
+.sw-motion-card:hover { border-color: color-mix(in srgb, var(--sw-portal-blue) 32%, var(--sw-portal-border)); box-shadow: 0 8px 22px rgba(16, 50, 85, 0.09); }
+.sw-motion-cta { position: relative; overflow: hidden; isolation: isolate; transition: transform 160ms ease, box-shadow 180ms ease, border-color 180ms ease; }
+.sw-motion-cta::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(112deg, transparent 20%, rgba(255,255,255,.18) 48%, transparent 72%); transform: translateX(-130%); transition: transform 480ms ease; }
+.sw-motion-cta:hover::after { transform: translateX(130%); }
+.sw-motion-cta:hover { box-shadow: 0 7px 18px rgba(0, 66, 125, .16); }
+.sw-motion-cta:active { transform: translateY(1px) scale(.99); }
+@media (prefers-reduced-motion: reduce) { .sw-motion-card, .sw-motion-cta, .sw-motion-cta::after { transition: none !important; animation: none !important; } .sw-motion-cta:hover { transform: none; } }
