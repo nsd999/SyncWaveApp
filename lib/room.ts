@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase } from './syncwave-supabase-client';
 
 export interface Room {
   id: string;
