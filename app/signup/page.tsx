@@ -20,6 +20,8 @@ export default function SignupPage() {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
   const [isPendingCreate, setIsPendingCreate] = React.useState(false);
+  const [supabaseHealthStatus, setSupabaseHealthStatus] = React.useState<'checking' | 'connected' | 'not_configured' | 'schema_missing' | 'unavailable'>('checking');
+  const [supabaseHealthMessage, setSupabaseHealthMessage] = React.useState('Checking the SyncWave database connection…');
 
   React.useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true') {
@@ -29,6 +31,54 @@ export default function SignupPage() {
 
   const proposedUsername = email ? cleanBaseUsername(email.split('@')[0]) : '';
 
+  React.useEffect(() => {
+    let disposed = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
+
+    if (!isSupabaseConfigured()) {
+      setSupabaseHealthStatus('not_configured');
+      setSupabaseHealthMessage(SUPABASE_CONFIGURATION_MESSAGE);
+      window.clearTimeout(timeout);
+      return () => {
+        disposed = true;
+        controller.abort();
+      };
+    }
+
+    fetch('/api/health/supabase', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (disposed) return;
+        const status = data.status === 'connected' ? 'connected'
+          : data.status === 'not_configured' ? 'not_configured'
+          : data.status === 'schema_missing' ? 'schema_missing'
+          : 'unavailable';
+        setSupabaseHealthStatus(status);
+        setSupabaseHealthMessage(
+          typeof data.message === 'string' && data.message.trim()
+            ? data.message
+            : 'SyncWave could not verify its database connection.'
+        );
+      })
+      .catch((error: any) => {
+        if (disposed) return;
+        setSupabaseHealthStatus('unavailable');
+        setSupabaseHealthMessage(
+          error?.name === 'AbortError'
+            ? 'The SyncWave database health check timed out. Try again shortly.'
+            : 'SyncWave could not reach the room database. Check the project connection and try again.'
+        );
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
+
   const handleGoogleSignup = async () => {
     if (submitting) return;
     setSubmitting(true);
@@ -37,8 +87,8 @@ export default function SignupPage() {
 
     writeLog('info', 'Google Signup started', `Attempting Google signup`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
@@ -84,8 +134,8 @@ export default function SignupPage() {
 
     writeLog('info', 'Signup started', `Attempting signup for: ${email}`);
 
-    if (!isSupabaseConfigured()) {
-      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
+    if (!isSupabaseConfigured() || supabaseHealthStatus !== 'connected') {
+      setErrorMsg(supabaseHealthMessage);
       setSubmitting(false);
       return;
     }
@@ -153,9 +203,9 @@ export default function SignupPage() {
           <p className="text-xs text-stone-500 font-mono">Join shared rooms and listen together</p>
         </div>
 
-        {!isSupabaseConfigured() && (
-          <div id="database-configuration-warning" role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
-            {SUPABASE_CONFIGURATION_MESSAGE}
+        {supabaseHealthStatus !== 'connected' && (
+          <div id="database-configuration-warning" role="alert" aria-live="polite" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+            {supabaseHealthMessage}
           </div>
         )}
 
@@ -190,7 +240,7 @@ export default function SignupPage() {
             <button
               type="button"
               onClick={handleGoogleSignup}
-              disabled={submitting || !isSupabaseConfigured()}
+              disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
               className="w-full bg-white border border-stone-200 text-stone-700 py-2 rounded-lg text-xs font-semibold tracking-wider hover:bg-stone-50 active:scale-98 transition flex items-center justify-center space-x-2 shadow-sm pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -217,7 +267,7 @@ export default function SignupPage() {
                 </span>
                 <input
                   type="text"
-                  disabled={submitting || !isSupabaseConfigured()}
+                  disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                   placeholder="Sai Dheeraj"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
@@ -235,7 +285,7 @@ export default function SignupPage() {
                 <input
                   type="email"
                   required
-                  disabled={submitting || !isSupabaseConfigured()}
+                  disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                   placeholder="sai@syncwave.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -259,7 +309,7 @@ export default function SignupPage() {
                 <input
                   type="password"
                   required
-                  disabled={submitting || !isSupabaseConfigured()}
+                  disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -270,7 +320,7 @@ export default function SignupPage() {
 
             <button
               type="submit"
-              disabled={submitting || !isSupabaseConfigured()}
+              disabled={submitting || !isSupabaseConfigured() || supabaseHealthStatus !== 'connected'}
               className="w-full bg-stone-900 text-stone-100 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase hover:bg-stone-850 active:scale-98 transition flex items-center justify-center space-x-1.5 shadow-md shadow-stone-200 pointer mt-2 cursor-pointer disabled:bg-stone-400"
             >
               {submitting ? (
