@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { getAuthRedirectUrl } from '@/lib/auth-redirect';
@@ -34,7 +34,7 @@ export default function LoginPage() {
     writeLog('info', 'Google Login started', `Executing Google login transaction`);
 
     if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase engine is unconfigured in this applet.');
+      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
       setSubmitting(false);
       return;
     }
@@ -77,7 +77,7 @@ export default function LoginPage() {
     writeLog('info', 'Login started', `Executing login transaction for: ${email}`);
 
     if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase engine is unconfigured in this applet.');
+      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
       setSubmitting(false);
       return;
     }
@@ -133,6 +133,12 @@ export default function LoginPage() {
           <p className="text-xs text-stone-500 font-mono">Sign in to your account</p>
         </div>
 
+        {!isSupabaseConfigured() && (
+          <div id="database-configuration-warning" role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+            {SUPABASE_CONFIGURATION_MESSAGE}
+          </div>
+        )}
+
         {isPendingCreate && (
           <div id="pending-create-alert" className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-xl text-xs leading-relaxed text-center font-medium animate-fade-in shadow-sm">
             Create an account or sign in to host a SyncWave room.
@@ -163,7 +169,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={handleGoogleLogin}
-            disabled={submitting}
+            disabled={submitting || !isSupabaseConfigured()}
             className="w-full bg-white border border-stone-200 text-stone-700 py-2 rounded-lg text-xs font-semibold tracking-wider hover:bg-stone-50 active:scale-98 transition flex items-center justify-center space-x-2 shadow-sm pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -228,7 +234,7 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !isSupabaseConfigured()}
             className="w-full bg-stone-900 text-stone-100 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase hover:bg-stone-850 active:scale-98 transition flex items-center justify-center space-x-1.5 shadow-md shadow-stone-200 hover:shadow-stone-300 pointer mt-2 cursor-pointer disabled:bg-stone-400 disabled:cursor-not-allowed"
           >
             {submitting ? (
