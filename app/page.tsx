@@ -48,7 +48,9 @@ export default function Home() {
   const router = useRouter();
   const { user, profile, loading, signOut } = useAuth();
   const supabaseConfigured = isSupabaseConfigured();
-  
+  const [supabaseHealthStatus, setSupabaseHealthStatus] = React.useState<'checking' | 'connected' | 'not_configured' | 'schema_missing' | 'unavailable'>('checking');
+  const [supabaseHealthMessage, setSupabaseHealthMessage] = React.useState('Checking room and account services…');
+
   const { theme, setTheme, resolvedTheme = 'dark' } = useTheme();
 
   // Dialog / Modal triggers
@@ -79,6 +81,53 @@ export default function Home() {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 5000);
   }, []);
+
+  // Check actual Supabase reachability/schema; env-variable presence alone isn't enough.
+  React.useEffect(() => {
+    if (!supabaseConfigured) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSupabaseHealthStatus('not_configured');
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSupabaseHealthMessage(SUPABASE_CONFIGURATION_MESSAGE);
+      return;
+    }
+
+    let disposed = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
+
+    fetch('/api/health/supabase', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (disposed) return;
+        const status = data.status === 'connected' ? 'connected'
+          : data.status === 'not_configured' ? 'not_configured'
+          : data.status === 'schema_missing' ? 'schema_missing'
+          : 'unavailable';
+        setSupabaseHealthStatus(status);
+        setSupabaseHealthMessage(
+          typeof data.message === 'string' && data.message.trim()
+            ? data.message
+            : 'SyncWave could not verify its room database connection.'
+        );
+      })
+      .catch((error: any) => {
+        if (disposed) return;
+        setSupabaseHealthStatus('unavailable');
+        setSupabaseHealthMessage(
+          error?.name === 'AbortError'
+            ? 'The SyncWave room database health check timed out. Try again shortly.'
+            : 'SyncWave could not reach the room database. Check the connection and try again.'
+        );
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [supabaseConfigured]);
 
   // Resume active pending flows on mount
   React.useEffect(() => {
@@ -127,8 +176,8 @@ export default function Home() {
   const submitCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || creatingRoom || !createName.trim()) return;
-    if (!supabaseConfigured) {
-      setCreateError(SUPABASE_CONFIGURATION_MESSAGE);
+    if (!supabaseConfigured || supabaseHealthStatus !== 'connected') {
+      setCreateError(supabaseHealthMessage);
       return;
     }
 
@@ -211,9 +260,9 @@ export default function Home() {
       return;
     }
     if (joiningRoom) return;
-    if (!supabaseConfigured) {
-      setJoinError(SUPABASE_CONFIGURATION_MESSAGE);
-      showToast(SUPABASE_CONFIGURATION_MESSAGE, "error");
+    if (!supabaseConfigured || supabaseHealthStatus !== 'connected') {
+      setJoinError(supabaseHealthMessage);
+      showToast(supabaseHealthMessage, "error");
       return;
     }
 
@@ -298,8 +347,8 @@ export default function Home() {
     setJoinError(null);
 
     const formattedCode = verifiedRoomMatch.slug.toUpperCase();
-    if (!supabaseConfigured) {
-      setJoinError(SUPABASE_CONFIGURATION_MESSAGE);
+    if (!supabaseConfigured || supabaseHealthStatus !== 'connected') {
+      setJoinError(supabaseHealthMessage);
       setJoiningRoom(false);
       return;
     }
@@ -485,13 +534,15 @@ export default function Home() {
         </div>
       </header>
 
-      {!supabaseConfigured && (
-        <div id="database-configuration-warning" role="alert" className="w-full border-b border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+      {supabaseHealthStatus !== 'connected' && (
+        <div id="database-configuration-warning" role="alert" aria-live="polite" className="w-full border-b border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
           <div className="mx-auto max-w-7xl flex items-start gap-3 text-sm">
             <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" aria-hidden="true" />
             <div className="min-w-0">
-              <p className="font-semibold">Room and account services are not connected.</p>
-              <p className="mt-1 text-xs leading-relaxed">The deployment is missing its Supabase URL and publishable key. The site can open, but sign-in, creating rooms, joining friends, chat, and shared playback will not work until the Vercel environment is configured and redeployed.</p>
+              <p className="font-semibold">
+                {supabaseHealthStatus === 'checking' ? 'Checking room and account services…' : 'Room and account services are unavailable.'}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed">{supabaseHealthMessage}</p>
             </div>
           </div>
         </div>
