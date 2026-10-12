@@ -40,6 +40,14 @@ ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS updated_by UUID;
 ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ;
 ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
 ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+-- Some installations already ran the earlier v2 reset migration and therefore no longer
+-- have the legacy columns; add them before the compatibility backfill below.
+ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS track_id TEXT;
+ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS track_name TEXT;
+ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS artist_name TEXT;
+ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS duration_ms INTEGER DEFAULT 0;
+ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS progress_ms INTEGER DEFAULT 0;
+ALTER TABLE public.playback_state ADD COLUMN IF NOT EXISTS updated_by_id UUID;
 
 -- Convert legacy track IDs/progress where they can be interpreted safely.
 UPDATE public.playback_state
