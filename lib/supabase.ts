@@ -1,22 +1,31 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
-  'https://yqnybxkymosovzqbajgm.supabase.co';
-
-const supabaseKey =
+const configuredSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || '';
+const configuredSupabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ||
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
-  'sb_publishable_zwMeWLvSIjBvzzxC20qHlQ_pu7q986S';
+  '';
+
+/**
+ * SyncWave must never silently send production requests to a fallback project.
+ * The reserved .invalid domain lets the client be constructed while forms show
+ * a clear configuration error instead of issuing requests to the wrong database.
+ */
+const supabaseUrl = configuredSupabaseUrl || 'https://missing-supabase-config.invalid';
+const supabaseKey = configuredSupabaseKey || 'missing-supabase-publishable-key';
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
+export const SUPABASE_CONFIGURATION_MESSAGE =
+  'SyncWave is not connected to its database yet. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in Vercel for Preview and Production, then redeploy.';
+
 export function isSupabaseConfigured(): boolean {
-  return Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
-    (
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ||
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
-    )
-  );
+  if (!configuredSupabaseUrl || !configuredSupabaseKey) return false;
+
+  try {
+    const url = new URL(configuredSupabaseUrl);
+    return url.protocol === 'https:' || url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
 }
