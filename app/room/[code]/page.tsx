@@ -462,7 +462,6 @@ export default function RoomPage() {
     }
 
     const currentText = typedMessage.trim();
-    setTypedMessage('');
 
     try {
       const senderId = currentMember.user_id || currentMember.guest_id || 'anonymous';
@@ -475,8 +474,10 @@ export default function RoomPage() {
       }]);
 
       if (error) throw error;
+      setTypedMessage((currentDraft) => currentDraft === currentText ? '' : currentDraft);
     } catch (err: any) {
       console.error('[Room Chat] Message delivery failed:', err.message);
+      showToast('Message could not be sent. Check the room connection and try again.', 'error');
     }
   };
 
@@ -485,10 +486,13 @@ export default function RoomPage() {
     if (room.host_id !== user?.id) return;
 
     try {
-      await supabase.from('room_members').update({ is_muted: !currentMuteState }).eq('id', memberId);
-      writeLog('info', 'Security block', `Participant mute toggled to ${!currentMuteState} by Host.`);
+      const { error } = await supabase.from('room_members').update({ is_muted: !currentMuteState }).eq('id', memberId);
+      if (error) throw error;
+      writeLog('success', 'Host moderation', `Participant mute set to ${!currentMuteState}.`);
+      showToast(!currentMuteState ? 'Participant muted.' : 'Participant unmuted.', 'success');
     } catch (err: any) {
       console.error('Host control update failed:', err);
+      showToast('Could not update this participant. Check the room connection and permissions.', 'error');
     }
   };
 
@@ -497,10 +501,13 @@ export default function RoomPage() {
     if (room.host_id !== user?.id) return;
 
     try {
-      await supabase.from('room_members').delete().eq('id', memberId);
-      writeLog('success', 'Security block', `Host kicked participant "${displayName}" from the session.`);
+      const { error } = await supabase.from('room_members').delete().eq('id', memberId);
+      if (error) throw error;
+      writeLog('success', 'Host moderation', `Removed participant "${displayName}" from the room.`);
+      showToast(`${displayName} was removed from the room.`, 'success');
     } catch (err: any) {
       console.error('Kick execution rejected:', err.message);
+      showToast('Could not remove this participant. Check the room connection and permissions.', 'error');
     }
   };
 
@@ -512,10 +519,13 @@ export default function RoomPage() {
     }
 
     try {
-      await supabase.from('room_members').update({ is_banned: true }).eq('id', memberId);
-      writeLog('success', 'Security block', `Host banned participant "${displayName}".`);
+      const { error } = await supabase.from('room_members').update({ is_banned: true }).eq('id', memberId);
+      if (error) throw error;
+      writeLog('success', 'Host moderation', `Banned participant "${displayName}".`);
+      showToast(`${displayName} was banned from the room.`, 'success');
     } catch (err: any) {
       console.error('Ban execution rejected:', err.message);
+      showToast('Could not ban this participant. Check the room connection and permissions.', 'error');
     }
   };
 
