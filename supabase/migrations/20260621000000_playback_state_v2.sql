@@ -91,6 +91,10 @@ DROP POLICY IF EXISTS "Allow room members & co-hosts update permission" ON publi
 DROP POLICY IF EXISTS "Allow room host to create playback state" ON public.playback_state;
 DROP POLICY IF EXISTS "Allow room host to update playback state" ON public.playback_state;
 DROP POLICY IF EXISTS "Allow room host to remove playback state" ON public.playback_state;
+DROP POLICY IF EXISTS "Room members can read playback state" ON public.playback_state;
+DROP POLICY IF EXISTS "Room host can create playback state" ON public.playback_state;
+DROP POLICY IF EXISTS "Room host can update playback state" ON public.playback_state;
+DROP POLICY IF EXISTS "Room host can delete playback state" ON public.playback_state;
 
 CREATE POLICY "Room members can read playback state"
 ON public.playback_state FOR SELECT TO public
