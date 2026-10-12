@@ -4,7 +4,7 @@ import * as React from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils';
 
-export type AnimatedButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+export type AnimatedButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onDrag' | 'onDragStart' | 'onDragEnd'> & {
   tone?: 'primary' | 'secondary';
 };
 
