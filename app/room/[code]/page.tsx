@@ -893,17 +893,11 @@ export default function RoomPage() {
               setMediaStatus('Ended');
             }
 
-            if (!currentIsHost) return;
-            if (isUpdatingFromRemote.current) return;
-
-            // Player state tags: 1 = PLAYING, 2 = PAUSED, 0 = ENDED
-            if (stateCode === 1) {
-              const cur = ytPlayerRef.current?.getCurrentTime() || 0;
-              PlaybackSyncService.play(room?.id || '', cur, user?.id);
-            } else if (stateCode === 2) {
-              const cur = ytPlayerRef.current?.getCurrentTime() || 0;
-              PlaybackSyncService.pause(room?.id || '', cur, user?.id);
-            } else if (stateCode === 0) {
+            // Play/pause/seek buttons publish the authoritative state themselves. Avoid
+            // echoing duplicate database writes from the iframe's programmatic events.
+            // Track completion is different: only the host advances the shared queue.
+            if (!currentIsHost || isUpdatingFromRemote.current) return;
+            if (stateCode === 0) {
               void handleMediaEndedRef.current?.();
             }
           },
