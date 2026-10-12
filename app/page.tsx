@@ -579,7 +579,7 @@ export default function Home() {
         <div id="hero-actions" className="flex flex-col sm:flex-row items-stretch justify-center gap-4 w-full max-w-md mx-auto pt-4">
           <button
             onClick={handleCreateRoomClick}
-            className="flex-1 bg-stone-900 text-stone-50 hover:bg-stone-850 py-4 px-6 rounded-2xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-lg hover:shadow-stone-300 hover:scale-[1.02] active:scale-[0.99] flex items-center justify-center space-x-2"
+            className="sw-motion-cta flex-1 bg-stone-900 text-stone-50 hover:bg-stone-850 py-4 px-6 rounded-xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-sm flex items-center justify-center space-x-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
           >
             <Plus className="w-5 h-5 text-cyan-400 shrink-0" />
             <span>Create Room</span>
@@ -587,7 +587,7 @@ export default function Home() {
           
           <button
             onClick={handleJoinRoomClick}
-            className="flex-1 bg-white border border-stone-200 hover:border-stone-400 text-stone-800 py-4 px-6 rounded-2xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-[0.99] flex items-center justify-center space-x-2"
+            className="sw-motion-cta flex-1 bg-white border border-stone-200 hover:border-stone-400 text-stone-800 py-4 px-6 rounded-xl font-semibold tracking-wide text-sm sm:text-base transition-all duration-200 cursor-pointer shadow-sm flex items-center justify-center space-x-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
           >
             <Users className="w-5 h-5 text-fuchsia-500 shrink-0" />
             <span>Join Room</span>
