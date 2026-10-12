@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
-import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/syncwave-supabase-client';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 import { getUniqueGuestName, Room, RoomMember } from '@/lib/room';
