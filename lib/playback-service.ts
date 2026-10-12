@@ -3,6 +3,19 @@ import { PlaybackState, MediaQueueItem } from '@/types/playback';
 import { writeLog } from './logger';
 
 export class PlaybackSyncService {
+  private static async persistPlaybackPatch(roomId: string, patch: Record<string, unknown>): Promise<void> {
+    const { data, error } = await supabase
+      .from('playback_state')
+      .update(patch)
+      .eq('room_id', roomId)
+      .select('id');
+
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      throw new Error('No playback state row was updated. Room initialization may be incomplete.');
+    }
+  }
+
   static async initializePlaybackState(roomId: string, isHost: boolean): Promise<PlaybackState | null> {
     try {
       const { data, error } = await supabase
@@ -52,14 +65,13 @@ export class PlaybackSyncService {
 
   static async play(roomId: string, currentTime: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      const { error } = await supabase.from('playback_state').update({
+      await this.persistPlaybackPatch(roomId, {
         is_playing: true,
         current_time: currentTime,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
-      }).eq('room_id', roomId);
-      if (error) throw error;
+      });
       writeLog('success', 'Sync Wave Engine', `Host broadcasted PLAY event from timestamp: ${currentTime.toFixed(1)}s`);
       return true;
     } catch (e: any) {
@@ -71,14 +83,13 @@ export class PlaybackSyncService {
 
   static async pause(roomId: string, currentTime: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      const { error } = await supabase.from('playback_state').update({
+      await this.persistPlaybackPatch(roomId, {
         is_playing: false,
         current_time: currentTime,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
-      }).eq('room_id', roomId);
-      if (error) throw error;
+      });
       writeLog('success', 'Sync Wave Engine', `Host broadcasted PAUSE event at timestamp: ${currentTime.toFixed(1)}s`);
       return true;
     } catch (e: any) {
@@ -90,13 +101,12 @@ export class PlaybackSyncService {
 
   static async seek(roomId: string, currentTime: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      const { error } = await supabase.from('playback_state').update({
+      await this.persistPlaybackPatch(roomId, {
         current_time: currentTime,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
-      }).eq('room_id', roomId);
-      if (error) throw error;
+      });
       writeLog('success', 'Sync Wave Engine', `Host broadcasted SEEK event to: ${currentTime.toFixed(1)}s`);
       return true;
     } catch (e: any) {
@@ -125,13 +135,12 @@ export class PlaybackSyncService {
 
   static async updateRate(roomId: string, playbackRate: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      const { error } = await supabase.from('playback_state').update({
+      await this.persistPlaybackPatch(roomId, {
         playback_rate: playbackRate,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
-      }).eq('room_id', roomId);
-      if (error) throw error;
+      });
       writeLog('success', 'Sync Wave Engine', `Host broadcasted SPEED event: ${playbackRate}x`);
       return true;
     } catch (e: any) {
@@ -143,7 +152,7 @@ export class PlaybackSyncService {
 
   static async updateMedia(roomId: string, mediaUrl: string, mediaType: 'video' | 'audio', duration: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      const { error } = await supabase.from('playback_state').update({
+      await this.persistPlaybackPatch(roomId, {
         media_url: mediaUrl,
         media_type: mediaType,
         current_time: 0,
@@ -152,9 +161,8 @@ export class PlaybackSyncService {
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
-      }).eq('room_id', roomId);
-      if (error) throw error;
-      writeLog('success', 'Sync Wave Engine', `Host changed media file: ${mediaUrl}`);
+      });
+      writeLog('success', 'Sync Wave Engine', 'Host changed the shared media source.');
       return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] updateMedia error:', e.message);
