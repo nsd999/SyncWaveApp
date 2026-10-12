@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured, SUPABASE_CONFIGURATION_MESSAGE } from '@/lib/supabase';
 import { getOrCreateProfile } from '@/lib/profile';
 import { getFriendlyErrorMessage } from '@/lib/auth-errors';
 import { getAuthRedirectUrl } from '@/lib/auth-redirect';
@@ -38,7 +38,7 @@ export default function SignupPage() {
     writeLog('info', 'Google Signup started', `Attempting Google signup`);
 
     if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase client is unconfigured in this applet.');
+      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
       setSubmitting(false);
       return;
     }
@@ -85,7 +85,7 @@ export default function SignupPage() {
     writeLog('info', 'Signup started', `Attempting signup for: ${email}`);
 
     if (!isSupabaseConfigured()) {
-      setErrorMsg('Supabase client is unconfigured in this applet.');
+      setErrorMsg(SUPABASE_CONFIGURATION_MESSAGE);
       setSubmitting(false);
       return;
     }
@@ -153,6 +153,12 @@ export default function SignupPage() {
           <p className="text-xs text-stone-500 font-mono">Join shared rooms and listen together</p>
         </div>
 
+        {!isSupabaseConfigured() && (
+          <div id="database-configuration-warning" role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-950">
+            {SUPABASE_CONFIGURATION_MESSAGE}
+          </div>
+        )}
+
         {isPendingCreate && (
           <div id="pending-create-alert" className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-xl text-xs leading-relaxed text-center font-medium animate-fade-in shadow-sm">
             Create an account or sign in to host a SyncWave room.
@@ -184,7 +190,7 @@ export default function SignupPage() {
             <button
               type="button"
               onClick={handleGoogleSignup}
-              disabled={submitting}
+              disabled={submitting || !isSupabaseConfigured()}
               className="w-full bg-white border border-stone-200 text-stone-700 py-2 rounded-lg text-xs font-semibold tracking-wider hover:bg-stone-50 active:scale-98 transition flex items-center justify-center space-x-2 shadow-sm pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -211,7 +217,7 @@ export default function SignupPage() {
                 </span>
                 <input
                   type="text"
-                  disabled={submitting}
+                  disabled={submitting || !isSupabaseConfigured()}
                   placeholder="Sai Dheeraj"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
@@ -229,7 +235,7 @@ export default function SignupPage() {
                 <input
                   type="email"
                   required
-                  disabled={submitting}
+                  disabled={submitting || !isSupabaseConfigured()}
                   placeholder="sai@syncwave.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -253,7 +259,7 @@ export default function SignupPage() {
                 <input
                   type="password"
                   required
-                  disabled={submitting}
+                  disabled={submitting || !isSupabaseConfigured()}
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -264,7 +270,7 @@ export default function SignupPage() {
 
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !isSupabaseConfigured()}
               className="w-full bg-stone-900 text-stone-100 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase hover:bg-stone-850 active:scale-98 transition flex items-center justify-center space-x-1.5 shadow-md shadow-stone-200 pointer mt-2 cursor-pointer disabled:bg-stone-400"
             >
               {submitting ? (
