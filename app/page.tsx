@@ -9,6 +9,7 @@ import { generateRoomCode, getUniqueGuestName } from '@/lib/room';
 import { getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
 import Logo from '@/components/Logo';
+import { FaqAccordion } from '@/components/ui/faq-accordion';
 import { 
   Plus, 
   ArrowRight, 
@@ -657,6 +658,36 @@ export default function Home() {
               </p>
             </div>
           </div>
+        </section>
+
+        {/* Vengeance UI: keyboard-accessible FAQ accordion, tuned to the portal design */}
+        <section id="help-and-faq" className="w-full mt-14 border-t border-stone-200/70 pt-8 dark:border-stone-800">
+          <FaqAccordion
+            title="Questions before you start?"
+            description="A quick guide to rooms, guests, and shared playback."
+            items={[
+              {
+                question: 'Do my friends need to create an account?',
+                answer: 'A host needs an account to create and manage a room. Guests can join an existing room with its code and a display name, without registering.'
+              },
+              {
+                question: 'How do I invite friends?',
+                answer: 'Create a room, then share its room code with the people you want to join. Keep the code private if the session is intended for your group only.'
+              },
+              {
+                question: 'Can SyncWave play any music or video link?',
+                answer: 'No single player supports every website. Use a supported direct audio/video source or a provider supported by the current player. Some services restrict embeds or playback outside their own apps.'
+              },
+              {
+                question: 'What happens if the room or database service is unavailable?',
+                answer: 'Room creation, joining, chat, and synchronized playback require the SyncWave backend to be reachable. If a connection warning appears, retry after the service is restored rather than repeatedly submitting the room code.'
+              },
+              {
+                question: 'Will playback always be perfectly synchronized?',
+                answer: 'Network delay, browser autoplay rules, and media-provider restrictions can affect synchronization. Keep the room open, allow playback when prompted, and use a supported media source for the best results.'
+              }
+            ]}
+          />
         </section>
       </main>
 
