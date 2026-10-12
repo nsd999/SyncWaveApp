@@ -75,6 +75,6 @@ export function getDiagnosticsReport() {
     typeCheck: "not_verified_in_browser",
     runtimeCheck: "not_verified_in_browser",
     supabaseConfig: configured ? "configured" : "missing_environment_variables",
-    authClient: typeof window !== 'undefined' && !!localStorage.getItem('syncwave-auth-token') ? "active_session" : "ready"
+    authClient: "not_checked_by_browser_diagnostics"
   };
 }
