@@ -485,6 +485,18 @@ export default function Home() {
         </div>
       </header>
 
+      {!supabaseConfigured && (
+        <div id="database-configuration-warning" role="alert" className="w-full border-b border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+          <div className="mx-auto max-w-7xl flex items-start gap-3 text-sm">
+            <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="font-semibold">Room and account services are not connected.</p>
+              <p className="mt-1 text-xs leading-relaxed">The deployment is missing its Supabase URL and publishable key. The site can open, but sign-in, creating rooms, joining friends, chat, and shared playback will not work until the Vercel environment is configured and redeployed.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Hero & Content Section */}
       <main id="landing-hero" className="flex-1 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center py-12 md:py-20 z-10 text-center space-y-10">
         
