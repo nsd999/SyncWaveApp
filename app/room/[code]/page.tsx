@@ -533,64 +533,82 @@ export default function RoomPage() {
 
   const handleHostPlay = async () => {
     if (!room || !currentIsHost) return;
-    const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
-    
-    setIsPlaying(true);
-    setMediaStatus('Playing');
+    if (!mediaUrl) {
+      showToast('Choose a video or audio track before pressing play.', 'info');
+      return;
+    }
+
+    const isYouTube = mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/');
     let curTime = currentTime;
 
     if (isYouTube) {
-      if (ytPlayerRef.current && typeof ytPlayerRef.current.playVideo === 'function') {
-        try {
-          ytPlayerRef.current.playVideo();
-          curTime = ytPlayerRef.current.getCurrentTime() || 0;
-        } catch (e) {
-          console.warn('Failed play call on YouTube ref:', e);
-        }
+      const player = ytPlayerRef.current;
+      if (!player || typeof player.playVideo !== 'function') {
+        showToast('The YouTube player is still loading. Try again in a moment.', 'warning');
+        return;
+      }
+      try {
+        player.playVideo();
+        curTime = Number(player.getCurrentTime?.() || 0);
+      } catch (error) {
+        console.warn('Failed play call on YouTube ref:', error);
+        showToast('Could not start this YouTube video. Try again or choose another video.', 'error');
+        return;
       }
     } else {
       const player = playerRef.current;
-      if (player) {
-        try {
-          await player.play();
-          curTime = player.currentTime;
-        } catch (e) {
-          console.error('Failed to trigger HTML5 play:', e);
-        }
+      if (!player) {
+        showToast('The media player is still loading. Try again in a moment.', 'warning');
+        return;
+      }
+      try {
+        await player.play();
+        curTime = player.currentTime;
+        setNeedsPlaybackGesture(false);
+      } catch (error: any) {
+        setIsPlaying(false);
+        setMediaStatus('Paused');
+        if (error?.name === 'NotAllowedError') setNeedsPlaybackGesture(true);
+        showToast('Playback could not start in this browser. Use Enable Playback or choose another media source.', 'warning');
+        return;
       }
     }
 
-    await PlaybackSyncService.play(room.id, curTime, user?.id);
+    setIsPlaying(true);
+    setMediaStatus('Playing');
+    const synced = await PlaybackSyncService.play(room.id, curTime, user?.id);
+    if (!synced) {
+      showToast('Playback started here, but SyncWave could not broadcast it to friends. Check the room connection.', 'warning');
+    }
   };
 
   const handleHostPause = async () => {
     if (!room || !currentIsHost) return;
     const isYouTube = mediaUrl && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be') || mediaUrl.includes('/embed/'));
 
-    setIsPlaying(false);
-    setMediaStatus('Paused');
     let curTime = currentTime;
-
     if (isYouTube) {
-      if (ytPlayerRef.current && typeof ytPlayerRef.current.pauseVideo === 'function') {
+      const player = ytPlayerRef.current;
+      if (player && typeof player.pauseVideo === 'function') {
         try {
-          ytPlayerRef.current.pauseVideo();
-          curTime = ytPlayerRef.current.getCurrentTime() || 0;
-        } catch (e) {
-          console.warn('Failed pause call on YouTube ref:', e);
+          player.pauseVideo();
+          curTime = Number(player.getCurrentTime?.() || 0);
+        } catch (error) {
+          console.warn('Failed pause call on YouTube ref:', error);
         }
       }
-    } else {
-      const player = playerRef.current;
-      if (player) {
-        player.pause();
-        curTime = player.currentTime;
-      }
+    } else if (playerRef.current) {
+      playerRef.current.pause();
+      curTime = playerRef.current.currentTime;
     }
 
-    await PlaybackSyncService.pause(room.id, curTime, user?.id);
+    setIsPlaying(false);
+    setMediaStatus('Paused');
+    const synced = await PlaybackSyncService.pause(room.id, curTime, user?.id);
+    if (!synced) {
+      showToast('Paused on this device, but SyncWave could not broadcast the pause to friends.', 'warning');
+    }
   };
-
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setCurrentTime(val);
