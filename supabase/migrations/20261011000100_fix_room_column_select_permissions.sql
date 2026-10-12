@@ -2,7 +2,7 @@
 -- room UI projections to load without SELECT * permission errors.
 BEGIN;
 
-REVOKE SELECT ON TABLE public.room_members FROM anon, authenticated;
+REVOKE SELECT ON TABLE public.room_members FROM PUBLIC, anon, authenticated;
 GRANT SELECT (
   id,
   room_id,
@@ -20,7 +20,7 @@ GRANT INSERT, UPDATE, DELETE ON TABLE public.room_members TO anon, authenticated
 -- A table-level SELECT grant overrides a column-level revoke. Revoke table-wide
 -- reads and grant only the columns the room UI needs; sender_session_id remains
 -- available to INSERT policy checks but not to normal Data API SELECT queries.
-REVOKE SELECT ON TABLE public.messages FROM anon, authenticated;
+REVOKE SELECT ON TABLE public.messages FROM PUBLIC, anon, authenticated;
 GRANT SELECT (
   id,
   room_id,
