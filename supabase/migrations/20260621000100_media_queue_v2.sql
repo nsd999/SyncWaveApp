@@ -75,6 +75,9 @@ DROP POLICY IF EXISTS "Allow room host to insert media queue" ON public.media_qu
 DROP POLICY IF EXISTS "Allow room host to update media queue" ON public.media_queue;
 DROP POLICY IF EXISTS "Allow room host to delete media queue" ON public.media_queue;
 DROP POLICY IF EXISTS "Room members can read media queue" ON public.media_queue;
+DROP POLICY IF EXISTS "Room host can insert media queue" ON public.media_queue;
+DROP POLICY IF EXISTS "Room host can update media queue" ON public.media_queue;
+DROP POLICY IF EXISTS "Room host can delete media queue" ON public.media_queue;
 
 CREATE POLICY "Room members can read media queue"
 ON public.media_queue FOR SELECT TO public
