@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '@/components/AuthProvider';
 import { updateProfile, getOrCreateProfile } from '@/lib/profile';
 import { writeLog } from '@/lib/logger';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/syncwave-supabase-client';
 import { generateRoomCode } from '@/lib/room';
 import Logo from '@/components/Logo';
 import { useTheme } from 'next-themes';
