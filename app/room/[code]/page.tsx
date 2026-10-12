@@ -1721,6 +1721,36 @@ export default function RoomPage() {
 
     const initRoom = async () => {
       try {
+        // Verify the real database connection before starting multiple room queries.
+        const healthController = new AbortController();
+        const healthTimeout = window.setTimeout(() => healthController.abort(), 6000);
+        try {
+          const healthResponse = await fetch('/api/health/supabase', {
+            cache: 'no-store',
+            signal: healthController.signal
+          });
+          const health = await healthResponse.json().catch(() => ({}));
+          if (!healthResponse.ok || health.status !== 'connected') {
+            setInitError(
+              typeof health.message === 'string'
+                ? health.message
+                : 'SyncWave could not verify its room database connection. Check the project configuration and try again.'
+            );
+            setLoading(false);
+            return;
+          }
+        } catch (healthError: any) {
+          setInitError(
+            healthError?.name === 'AbortError'
+              ? 'SyncWave database health check timed out. Check the project connection and try again.'
+              : 'SyncWave could not reach the room database. Check the project connection and try again.'
+          );
+          setLoading(false);
+          return;
+        } finally {
+          window.clearTimeout(healthTimeout);
+        }
+
         const lookupController = new AbortController();
         const lookupTimeout = window.setTimeout(() => lookupController.abort(), ROOM_LOOKUP_TIMEOUT_MS);
         let snap: any = null;
