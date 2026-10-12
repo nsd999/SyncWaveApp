@@ -118,14 +118,13 @@ export class PlaybackSyncService {
 
   static async updateTime(roomId: string, currentTime: number, duration: number, updatedByUserId?: string): Promise<boolean> {
     try {
-      const { error } = await supabase.from('playback_state').update({
+      await this.persistPlaybackPatch(roomId, {
         current_time: currentTime,
         duration: duration,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         updated_by: updatedByUserId || null
-      }).eq('room_id', roomId);
-      if (error) throw error;
+      });
       return true;
     } catch (e: any) {
       console.error('[PlaybackSyncService] updateTime error:', e.message);
