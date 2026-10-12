@@ -643,7 +643,8 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, curTime, user?.id);
+    const synced = await PlaybackSyncService.seek(room.id, curTime, user?.id);
+    if (!synced) showToast('The seek position changed locally, but could not be synchronized to friends.', 'warning');
   };
 
   const handleTimeUpdate = () => {
@@ -1224,8 +1225,12 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.updateRate(room.id, rate, user?.id);
-    showToast(`Playback speed scaled to ${rate}x`, "success");
+    const synced = await PlaybackSyncService.updateRate(room.id, rate, user?.id);
+    if (synced) {
+      showToast(`Playback speed set to ${rate}x for the room.`, "success");
+    } else {
+      showToast('Speed changed on this device, but SyncWave could not broadcast it to friends.', 'warning');
+    }
   };
 
   const handleHostBackward10 = async () => {
@@ -1246,8 +1251,11 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, target, user?.id);
-    showToast("Skipped backward 10s", "info");
+    const synced = await PlaybackSyncService.seek(room.id, target, user?.id);
+    showToast(
+      synced ? "Skipped backward 10s" : "Seeked locally, but could not sync the position to friends.",
+      synced ? "info" : "warning"
+    );
   };
 
   const handleHostForward10 = async () => {
@@ -1268,8 +1276,11 @@ export default function RoomPage() {
       }
     }
 
-    await PlaybackSyncService.seek(room.id, target, user?.id);
-    showToast("Skipped forward 10s", "info");
+    const synced = await PlaybackSyncService.seek(room.id, target, user?.id);
+    showToast(
+      synced ? "Skipped forward 10s" : "Seeked locally, but could not sync the position to friends.",
+      synced ? "info" : "warning"
+    );
   };
 
   // QUEUE OPERATIONS
@@ -1341,13 +1352,19 @@ export default function RoomPage() {
       // Refetch queue
       const items = await PlaybackSyncService.fetchQueue(room.id);
       setQueue(items);
+    } else {
+      showToast('Could not add this media to the shared queue. Check room permissions and the database connection.', 'error');
     }
   };
 
   const handleRemoveFromQueue = async (id: string, title: string) => {
     if (!room || !currentIsHost) return;
     writeLog('info', 'Media Queue', `Removing item "${title}"`);
-    await PlaybackSyncService.removeFromQueue(id);
+    const removed = await PlaybackSyncService.removeFromQueue(id);
+    if (!removed) {
+      showToast('Could not remove this queue item. Check the room connection.', 'error');
+      return;
+    }
     const items = await PlaybackSyncService.fetchQueue(room.id);
     setQueue(items);
   };
@@ -1652,14 +1669,22 @@ export default function RoomPage() {
     if (url.includes('Sintel')) mediaDuration = 653;
     if (url.includes('Helix-Song-1')) mediaDuration = 372;
     
-    writeLog('info', 'Sync Wave Engine', `Loading media: ${url}`);
-    
+    let mediaHost = 'media source';
+    try {
+      mediaHost = new URL(url).hostname;
+    } catch {}
+    writeLog('info', 'Sync Wave Engine', `Loading media from ${mediaHost}`);
+
+    const synced = await PlaybackSyncService.updateMedia(room.id, url, type, mediaDuration, user?.id);
+    if (!synced) {
+      showToast('Could not update the shared media source. Your friends have not been switched to this media.', 'error');
+      return;
+    }
+
     setMediaUrl(url);
     setMediaType(type);
     setCurrentTime(0);
     setIsPlaying(false);
-    
-    await PlaybackSyncService.updateMedia(room.id, url, type, mediaDuration, user?.id);
   };
 
   const formatTime = (seconds: number): string => {
