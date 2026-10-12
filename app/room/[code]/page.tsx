@@ -1497,46 +1497,44 @@ export default function RoomPage() {
 
   const handleSkipNext = async () => {
     if (!room || !currentIsHost) return;
+    if (queue.length === 0) {
+      showToast('There are no more tracks in the shared queue.', 'info');
+      return;
+    }
 
-    if (queue.length > 0) {
-      const nextItem = queue[0];
-      writeLog('info', 'Sync Wave Engine', `Advancing lounge playback pipeline to next queue item: "${nextItem.title}"`);
+    const nextItem = queue[0];
+    const isYt = nextItem.media_type === 'youtube' || nextItem.media_url.includes('youtube.com') || nextItem.media_url.includes('youtu.be');
+    const loadedType = isYt ? 'video' : (nextItem.media_type as 'video' | 'audio');
+    writeLog('info', 'Sync Wave Engine', `Advancing to queued media: "${nextItem.title}"`);
 
-      // Mark off playlist queue
-      await PlaybackSyncService.markAsPlayed(nextItem.id);
+    const updated = await PlaybackSyncService.updateMedia(room.id, nextItem.media_url, loadedType, nextItem.duration, user?.id);
+    if (!updated) {
+      showToast('Could not switch the shared room to the next track. The queue was left unchanged.', 'error');
+      return;
+    }
 
-      // Clean load active playback space
-      setMediaUrl(nextItem.media_url);
-      const isYt = nextItem.media_type === 'youtube' || nextItem.media_url.includes('youtube.com') || nextItem.media_url.includes('youtu.be');
-      const loadedType = isYt ? 'video' : (nextItem.media_type as 'video' | 'audio');
-      setMediaType(loadedType);
-      setCurrentTime(0);
-      setIsPlaying(true);
+    const marked = await PlaybackSyncService.markAsPlayed(nextItem.id);
+    if (!marked) {
+      showToast('The next track is loaded, but its queue status could not be saved and may appear again.', 'warning');
+    }
 
-      await PlaybackSyncService.updateMedia(
-        room.id,
-        nextItem.media_url,
-        loadedType,
-        nextItem.duration,
-        user?.id
-      );
-      await PlaybackSyncService.play(room.id, 0, user?.id);
+    setMediaUrl(nextItem.media_url);
+    setMediaType(loadedType);
+    setCurrentTime(0);
+    setIsPlaying(false);
 
-      // Force play on playback target
-      setTimeout(() => {
-        if (playerRef.current) {
-          playerRef.current.currentTime = 0;
-          playerRef.current.play().catch((e) => console.log('Autoplay skipped item error:', e));
-        }
-      }, 300);
-
+    const started = await PlaybackSyncService.play(room.id, 0, user?.id);
+    if (!started) {
+      showToast('The next track is loaded but could not be started for everyone. Press Play to retry.', 'warning');
       const items = await PlaybackSyncService.fetchQueue(room.id);
       setQueue(items);
-    } else {
-      writeLog('warn', 'Sync Wave Engine', 'Cannot skip: Media Queue playlist is empty!');
+      return;
     }
-  };
 
+    setIsPlaying(true);
+    const items = await PlaybackSyncService.fetchQueue(room.id);
+    setQueue(items);
+  };
   // TYPING INDICATORS BROADCASTER
   const handleTypingKeydown = () => {
     if (!room || !currentMember || isTyping) return;
@@ -1569,48 +1567,46 @@ export default function RoomPage() {
   async function handleMediaEnded() {
     if (!room || !currentIsHost) return;
     writeLog('info', 'Sync Wave Engine', 'Active media stream finished playback.');
-    
+
     if (queue.length > 0) {
       const nextItem = queue[0];
-      writeLog('info', 'Sync Wave Engine', `Auto-play triggered. Loading next track in line: "${nextItem.title}"`);
-      
-      // Advance and mark off playlist
-      await PlaybackSyncService.markAsPlayed(nextItem.id);
-
-      // Set states
-      setMediaUrl(nextItem.media_url);
       const isYt = nextItem.media_type === 'youtube' || nextItem.media_url.includes('youtube.com') || nextItem.media_url.includes('youtu.be');
       const loadedType = isYt ? 'video' : (nextItem.media_type as 'video' | 'audio');
+      writeLog('info', 'Sync Wave Engine', `Automatically advancing to: "${nextItem.title}"`);
+
+      const updated = await PlaybackSyncService.updateMedia(room.id, nextItem.media_url, loadedType, nextItem.duration, user?.id);
+      if (!updated) {
+        setIsPlaying(false);
+        showToast('The finished track could not advance because the shared room update failed. Press Next to retry.', 'error');
+        return;
+      }
+
+      const marked = await PlaybackSyncService.markAsPlayed(nextItem.id);
+      if (!marked) {
+        showToast('The next track is loaded, but its queue status could not be saved and may appear again.', 'warning');
+      }
+
+      setMediaUrl(nextItem.media_url);
       setMediaType(loadedType);
       setCurrentTime(0);
-      setIsPlaying(true);
+      setIsPlaying(false);
 
-      await PlaybackSyncService.updateMedia(
-        room.id,
-        nextItem.media_url,
-        loadedType,
-        nextItem.duration,
-        user?.id
-      );
-      await PlaybackSyncService.play(room.id, 0, user?.id);
-
-      // Lazy start player
-      setTimeout(() => {
-        if (playerRef.current) {
-          playerRef.current.currentTime = 0;
-          playerRef.current.play().catch((e) => console.log('Autoplay play error:', e));
-        }
-      }, 300);
+      const started = await PlaybackSyncService.play(room.id, 0, user?.id);
+      if (!started) {
+        showToast('The next track is ready but could not start for everyone. Press Play to retry.', 'warning');
+      } else {
+        setIsPlaying(true);
+      }
 
       const items = await PlaybackSyncService.fetchQueue(room.id);
       setQueue(items);
     } else {
       writeLog('info', 'Sync Wave Engine', 'Playback ended and queue is empty, waiting in standby.');
       setIsPlaying(false);
-      await PlaybackSyncService.pause(room.id, currentTime, user?.id);
+      const paused = await PlaybackSyncService.pause(room.id, currentTime, user?.id);
+      if (!paused) showToast('Playback ended, but SyncWave could not update the shared pause state.', 'warning');
     }
-  };
-
+  }
   React.useEffect(() => {
     handleMediaEndedRef.current = handleMediaEnded;
   });
