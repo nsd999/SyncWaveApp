@@ -197,7 +197,7 @@ export default function LoginPage() {
               <input
                 type="email"
                 required
-                disabled={submitting}
+                disabled={submitting || !isSupabaseConfigured()}
                 placeholder="sai@syncwave.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -223,7 +223,7 @@ export default function LoginPage() {
               <input
                 type="password"
                 required
-                disabled={submitting}
+                disabled={submitting || !isSupabaseConfigured()}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
