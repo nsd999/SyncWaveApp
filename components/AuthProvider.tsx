@@ -73,6 +73,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) {
       writeLog('error', 'Login failure', `SignOut warning: ${err.message}`);
     }
+
+    // Clear the middleware cookie as well as the Supabase client session.
+    try {
+      await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+    } catch (err: any) {
+      writeLog('error', 'Session cleanup', `Could not clear server session cookie: ${err.message}`);
+    }
+
     setUser(null);
     setProfile(null);
     writeLog('success', 'Login success', 'Successfully signed out');
