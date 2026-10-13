@@ -320,6 +320,20 @@ export default function DashboardPage() {
     }
   }, [profile]);
 
+  // Resume room creation after authentication, without redirecting users back to the landing page.
+  React.useEffect(() => {
+    if (!user) return;
+    try {
+      if (localStorage.getItem('syncwave-pending-create') === 'true') {
+        localStorage.removeItem('syncwave-pending-create');
+        setShowCreateModal(true);
+        writeLog('success', 'Session restored', 'Resuming pending room creation from the dashboard.');
+      }
+    } catch (err) {
+      console.warn('Could not restore pending room creation:', err);
+    }
+  }, [user]);
+
   React.useEffect(() => {
     if (user && supabaseConnected) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
