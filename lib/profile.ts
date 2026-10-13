@@ -16,26 +16,37 @@ export async function getOrCreateProfile(
   email: string,
   displayName?: string
 ): Promise<Profile> {
-  const cleanDisplay = displayName || email.split('@')[0] || 'Member';
-  
+  if (!userId || !email) {
+    throw new Error('A verified user ID and email are required to load a profile.');
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const cleanDisplay = displayName || normalizedEmail.split('@')[0] || 'Member';
+
   try {
     const { data: existingProfile, error: getError } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
 
     if (existingProfile) {
       return existingProfile as Profile;
     }
 
-    const uniqueUsername = await generateUniqueUsername(email);
+    // Only create when the profile is genuinely absent. Do not disguise schema,
+    // permission, network, or API-key errors as a successful in-memory profile.
+    if (getError) {
+      throw getError;
+    }
+
+    const uniqueUsername = await generateUniqueUsername(normalizedEmail);
     const newProfile = {
       id: userId,
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
       username: uniqueUsername,
       display_name: cleanDisplay,
-      avatar_url: `https://picsum.photos/seed/${uniqueUsername}/150`
+      avatar_url: `https://picsum.photos/seed/${uniqueUsername}/150`,
     };
 
     const { data: insertedProfile, error: insertError } = await supabase
@@ -44,23 +55,26 @@ export async function getOrCreateProfile(
       .select()
       .single();
 
-    if (insertError) {
-      console.warn('Profile insertion error:', insertError);
-      throw insertError;
+    if (insertedProfile && !insertError) {
+      return insertedProfile as Profile;
     }
-    
-    return insertedProfile as Profile;
-  } catch (err: any) {
+
+    // A database trigger can create the same profile concurrently with this
+    // recovery path. Re-read once before returning a meaningful failure.
+    const { data: racedProfile, error: rereadError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (racedProfile && !rereadError) {
+      return racedProfile as Profile;
+    }
+
+    throw insertError || rereadError || new Error('Profile creation did not return a database record.');
+  } catch (err) {
     console.error('Supabase profile store error:', err);
-    return {
-      id: userId,
-      email: email.toLowerCase().trim(),
-      username: email.split('@')[0] || 'member',
-      display_name: cleanDisplay,
-      avatar_url: `https://picsum.photos/seed/${userId}/150`,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+    throw err;
   }
 }
 
@@ -72,7 +86,7 @@ export async function updateProfile(
     ...updates,
     updated_at: new Date().toISOString(),
   };
-  
+
   const { data, error } = await supabase
     .from('profiles')
     .update(updatedFields)
