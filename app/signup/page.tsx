@@ -98,6 +98,26 @@ export default function SignupPage() {
       
       const user = data.user;
 
+      // Supabase can return a user with no session when email confirmation is
+      // required. It can also return an empty identities array for an email
+      // that already exists. Neither case is an authenticated sign-in.
+      if (user && Array.isArray(user.identities) && user.identities.length === 0) {
+        setErrorMsg('An account with this email already exists. Sign in with the original password or use Reset Password.');
+        setSubmitting(false);
+        return;
+      }
+
+      if (user && !data.session) {
+        writeLog('success', 'Signup requires verification', 'Account registered without an active session; email confirmation may be required.');
+        setSuccessMsg('Your account has been registered. Please open the latest verification email (check spam too), verify your address, then return to Sign In. No dashboard session is active yet.');
+        setSubmitting(false);
+        return;
+      }
+
+      if (!user || !data.session?.access_token) {
+        throw new Error('Supabase did not return an authenticated session. Please verify your email if confirmation is enabled, then sign in.');
+      }
+
       if (user) {
         writeLog('success', 'Signup success', `Registered user in Supabase auth: ${user.email}`);
         setSuccessMsg('Initializing your SyncWave profile...');
@@ -110,7 +130,7 @@ export default function SignupPage() {
           const sessionResponse = await fetch('/api/auth/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: user.id, email: user.email || '' }),
+            body: JSON.stringify({ accessToken: data.session.access_token }),
           });
           if (!sessionResponse.ok) {
             throw new Error('Your account was created, but the secure session could not be initialized. Please sign in again.');
