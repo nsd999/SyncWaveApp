@@ -51,6 +51,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    const syncServerSession = async (accessToken: string) => {
+      const response = await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessToken }),
+      });
+      if (!response.ok) {
+        throw new Error('The app session cookie could not be synchronized.');
+      }
+    };
+
+    const clearServerSession = async () => {
+      try {
+        await fetch('/api/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+      } catch (err: any) {
+        writeLog('error', 'Session cleanup', `Could not clear server session cookie: ${err?.message || err}`);
+      }
+    };
+
     // Keep this callback synchronous. Awaiting other Supabase calls inside an
     // auth-state callback can hold the auth lock and prevent session recovery.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -60,12 +83,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!activeUser) {
         setProfile(null);
+        // Clear stale server-side state, including after expiry or direct sign-out.
+        window.setTimeout(() => {
+          if (mounted) void clearServerSession();
+        }, 0);
         return;
       }
 
+      const accessToken = session?.access_token;
       writeLog('success', 'Session restored', `Auth session restored for ${activeUser.email}`);
       window.setTimeout(() => {
-        if (mounted) void loadProfile(activeUser);
+        if (!mounted) return;
+        if (accessToken) {
+          void syncServerSession(accessToken).catch((err: any) => {
+            writeLog('error', 'Session synchronization', `Could not synchronize app session: ${err?.message || err}`);
+          });
+        }
+        void loadProfile(activeUser);
       }, 0);
     });
 
