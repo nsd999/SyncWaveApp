@@ -149,9 +149,31 @@ export default function DashboardPage() {
     }
   }, [user]);
 
+  const handleOpenCreateModal = () => {
+    setCreateError(null);
+    if (!user) {
+      setCreateError('Your sign-in session is not ready. Please sign in again, then retry creating a room.');
+      setShowCreateModal(true);
+      return;
+    }
+    if (!supabaseConnected) {
+      showToast('Database connection is unavailable. Please try again shortly.', 'error');
+      return;
+    }
+    setShowCreateModal(true);
+  };
+
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || creatingRoom || !createName.trim()) return;
+    if (creatingRoom || !createName.trim()) return;
+    if (!user) {
+      setCreateError('Your sign-in session has expired. Please sign in again before creating a room.');
+      return;
+    }
+    if (!supabaseConnected) {
+      setCreateError('Database connection is unavailable. Check the Supabase configuration and try again.');
+      return;
+    }
 
     setCreatingRoom(true);
     setCreateError(null);
@@ -184,7 +206,7 @@ export default function DashboardPage() {
       if (roomError) throw roomError;
       const roomId = roomDoc.id;
 
-      await supabase.from('room_members').insert([{
+      const { error: memberError } = await supabase.from('room_members').insert([{
         room_id: roomId,
         user_id: user.id,
         display_name: userProfile.display_name || user.email?.split('@')[0] || 'Host',
@@ -192,6 +214,11 @@ export default function DashboardPage() {
         is_banned: false,
         joined_at: new Date().toISOString(),
       }]);
+      if (memberError) {
+        // Avoid leaving an unusable room behind when host membership could not be initialized.
+        await supabase.from('rooms').delete().eq('id', roomId).eq('host_id', user.id);
+        throw new Error(`Room was created but host membership failed: ${memberError.message}`);
+      }
 
       const defaultState = {
         room_id: roomId,
@@ -204,7 +231,12 @@ export default function DashboardPage() {
         last_sync_at: new Date().toISOString()
       };
 
-      await supabase.from('playback_state').insert([defaultState]);
+      const { error: playbackError } = await supabase.from('playback_state').insert([defaultState]);
+      if (playbackError) {
+        await supabase.from('room_members').delete().eq('room_id', roomId).eq('user_id', user.id);
+        await supabase.from('rooms').delete().eq('id', roomId).eq('host_id', user.id);
+        throw new Error(`Room playback could not be initialized: ${playbackError.message}`);
+      }
 
       writeLog('success', 'Lounge synced', `Interactive studio room "${createName}" parsed successfully under code ${activeCode}!`);
 
@@ -228,7 +260,11 @@ export default function DashboardPage() {
       showToast("🫠 Looks like this invite missed the vibe check.", "error");
       return;
     }
-    if (joining || !supabaseConnected) return;
+    if (joining) return;
+    if (!supabaseConnected) {
+      showToast('Database connection is unavailable. Please try again shortly.', 'error');
+      return;
+    }
 
     setJoining(true);
     setJoinError(null);
@@ -492,7 +528,7 @@ export default function DashboardPage() {
       </nav>
 
       {/* Main Social Board Panel */}
-      <main id="main-panel-core" className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-8 py-8 flex flex-col space-y-8">
+      <main id="main-panel-core" className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 md:px-8 py-8 flex flex-col space-y-8">
         
         {/* Banner Announcement */}
         {showNotification && (
@@ -641,7 +677,7 @@ export default function DashboardPage() {
                 </div>
 
                 <button
-                  onClick={() => setShowCreateModal(true)}
+                  onClick={handleOpenCreateModal}
                   className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 hover:from-cyan-350 hover:to-purple-450 text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider uppercase transition shadow-md shadow-cyan-500/5 cursor-pointer flex items-center justify-center space-x-1.5"
                 >
                   <span>Create New Lounge</span>
@@ -757,7 +793,7 @@ export default function DashboardPage() {
 
                   <div className="flex items-center justify-center space-x-3 text-xs font-mono pt-2">
                     <button
-                      onClick={() => setShowCreateModal(true)}
+                      onClick={handleOpenCreateModal}
                       className="px-4 py-2 bg-cyan-400 text-stone-950 font-bold rounded-xl shadow-md transition active:scale-95 cursor-pointer hover:bg-cyan-500 flex items-center gap-1.5 text-[11px]"
                     >
                       <Plus className="w-3.5 h-3.5" />
@@ -925,7 +961,7 @@ export default function DashboardPage() {
 
                   <div className="pt-2">
                     <button
-                      onClick={() => setShowCreateModal(true)}
+                      onClick={handleOpenCreateModal}
                       className="px-4 py-2 bg-amber-500 text-stone-950 font-bold rounded-xl shadow-md transition active:scale-95 cursor-pointer hover:bg-amber-600 inline-flex items-center gap-1.5 text-[11px] font-mono"
                     >
                       <Plus className="w-3.5 h-3.5" />
