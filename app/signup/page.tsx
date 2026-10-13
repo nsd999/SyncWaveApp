@@ -105,17 +105,24 @@ export default function SignupPage() {
         try {
           const resolvedDisplay = displayName.trim() || email.split('@')[0] || 'New Member';
           await getOrCreateProfile(user.id, user.email || '', resolvedDisplay);
-          writeLog('success', 'Profile created', `Profile created for: ${user.id}`);
 
+          // Keep the server-side middleware session aligned with the authenticated Supabase user.
+          const sessionResponse = await fetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.id, email: user.email || '' }),
+          });
+          if (!sessionResponse.ok) {
+            throw new Error('Your account was created, but the secure session could not be initialized. Please sign in again.');
+          }
+
+          writeLog('success', 'Profile created', `Profile created for: ${user.id}`);
           setSuccessMsg('Account created! Loading dashboard...');
           setTimeout(() => {
-            const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-            if (pending) {
-              router.replace('/');
-            } else {
-              router.replace('/dashboard');
-            }
-          }, 1000);
+            // Always enter the dashboard. It resumes a pending room-creation flow if one exists.
+            router.replace('/dashboard');
+            router.refresh();
+          }, 500);
         } catch (profileErr: any) {
           writeLog('error', 'Signup failure', `Profile creation failed: ${profileErr.message}`);
           await supabase.auth.signOut();
