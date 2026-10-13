@@ -93,17 +93,23 @@ export default function LoginPage() {
 
         try {
           await getOrCreateProfile(user.id, user.email || '');
+
+          // Middleware checks this cookie, so synchronize it after Supabase sign-in.
+          const sessionResponse = await fetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.id, email: user.email || '' }),
+          });
+          if (!sessionResponse.ok) {
+            throw new Error('Sign-in succeeded, but the secure session could not be initialized. Please try again.');
+          }
+
           writeLog('success', 'Profile loaded', `Verified profile for: ${user.id}`);
           setSuccessMsg('Access approved. Redirecting to your Wave Dashboard...');
-
           setTimeout(() => {
-            const pending = typeof window !== 'undefined' && localStorage.getItem('syncwave-pending-create') === 'true';
-            if (pending) {
-              router.replace('/');
-            } else {
-              router.replace('/dashboard');
-            }
-          }, 800);
+            router.replace('/dashboard');
+            router.refresh();
+          }, 500);
         } catch (profileErr: any) {
           writeLog('error', 'Login failure', `Profile constraint failed: ${profileErr.message}`);
           await supabase.auth.signOut();
