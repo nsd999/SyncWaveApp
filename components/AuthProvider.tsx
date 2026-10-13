@@ -39,31 +39,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const activeUser = session?.user || null;
-      setUser(activeUser);
-      if (!activeUser) setLoading(false);
-    });
+    let mounted = true;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      const activeUser = session?.user || null;
-      setUser(activeUser);
-
-      if (activeUser) {
-        writeLog('success', 'Session restored', `Auth session restored for ${activeUser.email}`);
-        try {
-          const p = await getOrCreateProfile(activeUser.id, activeUser.email || '');
-          setProfile(p);
-        } catch (e: any) {
-          writeLog('error', 'Profile recovery', `Database profile error: ${e.message}`);
-        }
-      } else {
-        setProfile(null);
+    const loadProfile = async (activeUser: User) => {
+      try {
+        const activeProfile = await getOrCreateProfile(activeUser.id, activeUser.email || '');
+        if (mounted) setProfile(activeProfile);
+      } catch (err: any) {
+        writeLog('error', 'Profile recovery', `Database profile error: ${err?.message || err}`);
+        if (mounted) setProfile(null);
       }
+    };
+
+    // Keep this callback synchronous. Awaiting other Supabase calls inside an
+    // auth-state callback can hold the auth lock and prevent session recovery.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const activeUser = session?.user || null;
+      setUser(activeUser);
       setLoading(false);
+
+      if (!activeUser) {
+        setProfile(null);
+        return;
+      }
+
+      writeLog('success', 'Session restored', `Auth session restored for ${activeUser.email}`);
+      window.setTimeout(() => {
+        if (mounted) void loadProfile(activeUser);
+      }, 0);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, [configured]);
 
   const signOut = async () => {
