@@ -86,6 +86,9 @@ export default function LoginPage() {
       if (error) throw error;
       
       const user = data.user;
+      if (!user || !data.session?.access_token) {
+        throw new Error('Supabase did not establish an active session. If you just registered, verify your email first, then sign in again.');
+      }
 
       if (user) {
         writeLog('success', 'Login success', `Confirmed identity: ${user.email}`);
@@ -98,7 +101,7 @@ export default function LoginPage() {
           const sessionResponse = await fetch('/api/auth/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: user.id, email: user.email || '' }),
+            body: JSON.stringify({ accessToken: data.session.access_token }),
           });
           if (!sessionResponse.ok) {
             throw new Error('Sign-in succeeded, but the secure session could not be initialized. Please try again.');
