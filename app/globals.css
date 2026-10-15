@@ -118,21 +118,21 @@
   --sw-portal-card: #ffffff;
   --sw-portal-ink: #17324d;
   --sw-portal-muted: #5c7187;
-  --sw-portal-blue: #005aa9;
-  --sw-portal-blue-dark: #073b6d;
-  --sw-portal-orange: #f58220;
+  --sw-portal-blue: #0891b2;
+  --sw-portal-blue-dark: #0e7490;
+  --sw-portal-orange: #8b5cf6;
   --sw-portal-border: #d6e0eb;
-  --sw-portal-shadow: 0 5px 18px rgba(16, 50, 85, 0.08);
+  --sw-portal-shadow: 0 5px 22px rgba(8, 145, 178, 0.10);
 }
 
 html.dark {
   color-scheme: dark;
-  --sw-portal-canvas: #061c34;
-  --sw-portal-card: #0a2949;
-  --sw-portal-ink: #edf4fb;
-  --sw-portal-muted: #b5c7d8;
-  --sw-portal-border: #294763;
-  --sw-portal-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --sw-portal-canvas: #070b18;
+  --sw-portal-card: #0d1326;
+  --sw-portal-ink: #edf4ff;
+  --sw-portal-muted: #a6b5d0;
+  --sw-portal-border: #26304a;
+  --sw-portal-shadow: 0 8px 26px rgba(0, 0, 0, 0.28);
 }
 
 html {
@@ -480,3 +480,88 @@ textarea:focus-visible {
 .sw-motion-cta:hover { box-shadow: 0 7px 18px rgba(0, 66, 125, .16); }
 .sw-motion-cta:active { transform: translateY(1px) scale(.99); }
 @media (prefers-reduced-motion: reduce) { .sw-motion-card, .sw-motion-cta, .sw-motion-cta::after { transition: none !important; animation: none !important; } .sw-motion-cta:hover { transform: none; } }
+
+
+/* SyncWave brand-preserving portal layer: structured surfaces, Midnight Neon identity. */
+html.dark {
+  --sw-portal-blue: #22d3ee;
+  --sw-portal-blue-dark: #0891b2;
+  --sw-portal-orange: #a78bfa;
+  --sw-portal-border: #26304a;
+  --sw-portal-shadow: 0 8px 26px rgba(0, 0, 0, 0.28);
+}
+html.dark #landing-container,
+html.dark #dashboard-root-element,
+html.dark #room-viewport,
+html.dark #login-viewport,
+html.dark #signup-viewport,
+html.dark #admin-viewport {
+  background-color: var(--sw-portal-canvas) !important;
+  color: var(--sw-portal-ink) !important;
+}
+html.dark #landing-container .bg-white,
+html.dark #dashboard-root-element .bg-white,
+html.dark #room-viewport .bg-white,
+html.dark #login-viewport .bg-white,
+html.dark #signup-viewport .bg-white {
+  background-color: var(--sw-portal-card) !important;
+}
+html.dark #landing-container .border-stone-200,
+html.dark #dashboard-root-element .border-stone-200,
+html.dark #room-viewport .border-stone-200 {
+  border-color: var(--sw-portal-border) !important;
+}
+html.dark #landing-container .text-stone-900,
+html.dark #dashboard-root-element .text-stone-900,
+html.dark #room-viewport .text-stone-900 {
+  color: var(--sw-portal-ink) !important;
+}
+html.dark #landing-container .text-stone-500,
+html.dark #dashboard-root-element .text-stone-500,
+html.dark #room-viewport .text-stone-500 {
+  color: var(--sw-portal-muted) !important;
+}
+html.dark #landing-container .bg-stone-900,
+html.dark #dashboard-root-element .bg-stone-900,
+html.dark #room-viewport .bg-stone-900 {
+  background-color: #111a31 !important;
+}
+html.dark #landing-container .text-amber-500,
+html.dark #dashboard-root-element .text-amber-500,
+html.dark #room-viewport .text-amber-500 {
+  color: #a78bfa !important;
+}
+html.dark #landing-container .bg-amber-500,
+html.dark #dashboard-root-element .bg-amber-500,
+html.dark #room-viewport .bg-amber-500 {
+  background-color: #8b5cf6 !important;
+  color: #ffffff !important;
+}
+html.dark #landing-container .bg-amber-400,
+html.dark #dashboard-root-element .bg-amber-400,
+html.dark #room-viewport .bg-amber-400 {
+  background-color: #a78bfa !important;
+  color: #0b1020 !important;
+}
+html.dark #landing-container .border-amber-500,
+html.dark #dashboard-root-element .border-amber-500,
+html.dark #room-viewport .border-amber-500 {
+  border-color: #8b5cf6 !important;
+}
+html.dark #admin-nav {
+  background: #0d1326 !important;
+}
+html.dark #media-wave-mock div {
+  background: linear-gradient(180deg, #22d3ee, #8b5cf6) !important;
+}
+@media (max-width: 640px) {
+  #media-player-container,
+  #participants-container,
+  #live-chat-container,
+  #media-queue-container {
+    scroll-margin-top: 1rem;
+  }
+  #host-tools-container {
+    margin-bottom: 0.5rem;
+  }
+}
