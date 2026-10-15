@@ -23,11 +23,11 @@ The archived design mockups are concept references, not proof that every describ
 
 ## New visual direction
 
-The latest requested direction supersedes the old neon visual language. Use the information hierarchy of a straightforward self-service portal: clear product identity, a visible service/context strip, a small number of primary actions, grouped cards, concise help text, human-readable errors, clear states, and a guided workflow.
+The portal reference informs information architecture and guided journeys only; SyncWave branding remains Midnight Neon. Use a dark midnight canvas, cyan/purple accents, clear product identity, a small number of primary actions, grouped cards, concise help text, human-readable errors, clear states, and a guided workflow.
 
 Use these principles without reusing BSNL logos or presenting SyncWave as a government service:
 
-1. **Calm palette:** portal blue for primary actions, pale blue-gray canvas, white cards, neutral text, and restrained orange for emphasis.
+1. **Brand palette:** midnight navy surfaces, high-contrast text, cyan primary actions, restrained purple highlights, and subtle cyan/purple gradients. Do not introduce the reference portal’s orange/blue brand palette.
 2. **Clear hierarchy:** product/service label first, page heading second, primary action third, details after that.
 3. **Guided entry:** (1) create or join a room, (2) choose supported media, (3) listen/watch together.
 4. **Honest status:** show actual connection or room states. Do not present hard-coded usage statistics as live data.
@@ -45,4 +45,4 @@ Use these principles without reusing BSNL logos or presenting SyncWave as a gove
 
 ## Reference
 
-Visual inspiration: https://sahaj.bsnl.co.in/. The goal is the clarity and self-service flow of the portal, not a pixel-for-pixel copy of its UI, brand assets, or government identity.
+Visual inspiration: https://sevafirst.mic.gov.in/. Borrow only its information hierarchy, navigation clarity, structured content, responsive layouts, and guided user journeys. Preserve SyncWave’s logo, product identity, typography, and Midnight Neon cyan/purple palette; do not copy the reference branding.
