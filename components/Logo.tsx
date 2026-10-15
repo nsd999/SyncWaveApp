@@ -20,9 +20,9 @@ export default function Logo({ className = '', iconOnly = false }: LogoProps) {
       >
         <defs>
           <linearGradient id="waveGradient" x1="0%" y1="0%" x2="100%" y2="50%">
-            <stop offset="0%" stopColor="#005aa9" /> {/* Cyan 400 */}
-            <stop offset="50%" stopColor="#2476bf" /> {/* Blue 500 */}
-            <stop offset="100%" stopColor="#f58220" /> {/* Fuchsia 500 */}
+            <stop offset="0%" stopColor="#22d3ee" /> {/* Midnight Neon cyan */}
+            <stop offset="50%" stopColor="#8b5cf6" /> {/* Neon purple */}
+            <stop offset="100%" stopColor="#c4b5fd" /> {/* Soft violet highlight */}
           </linearGradient>
         </defs>
         
